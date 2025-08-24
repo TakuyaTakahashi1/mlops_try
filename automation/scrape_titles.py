@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import csv
@@ -9,6 +10,8 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 from bs4.element import Tag
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 TIMEOUT = 10  # seconds
 HEADERS = {
@@ -40,12 +43,10 @@ def _read_targets(p: Path) -> list[str]:
 
 
 def _squash_ws(s: str) -> str:
-    """連続空白/改行を1スペースに圧縮。"""
     return " ".join(s.split())
 
 
 def _attr_text(val: object) -> str | None:
-    """BeautifulSoupの属性値（str / list等）を必ずstrへ正規化。"""
     if val is None:
         return None
     if isinstance(val, str):
@@ -53,14 +54,12 @@ def _attr_text(val: object) -> str | None:
     if isinstance(val, list | tuple):
         joined = " ".join(str(x) for x in val)
         return _squash_ws(joined)
-    # その他の型も最後は文字列化
     return _squash_ws(str(val))
 
 
 def _extract_title(html: bytes) -> str | None:
     soup = BeautifulSoup(html, "lxml")
 
-    # 優先: og:title → <title> → <h1> → meta[name=title]
     og = soup.find("meta", property="og:title")
     if isinstance(og, Tag):
         t = _attr_text(og.get("content"))
@@ -85,9 +84,27 @@ def _extract_title(html: bytes) -> str | None:
     return None
 
 
-def _fetch(url: str) -> str | None:
+def _create_session() -> requests.Session:
+    sess = requests.Session()
+    retries = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset({"HEAD", "GET", "OPTIONS"}),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    sess.mount("http://", adapter)
+    sess.mount("https://", adapter)
+    sess.headers.update(HEADERS)
+    return sess
+
+
+def _fetch(session: requests.Session, url: str) -> str | None:
     try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
+        r = session.get(url, timeout=TIMEOUT, allow_redirects=True)
         r.raise_for_status()
         return _extract_title(r.content)
     except requests.exceptions.RequestException as e:
@@ -96,23 +113,52 @@ def _fetch(url: str) -> str | None:
 
 
 def _now_iso() -> str:
-    # 例: 2025-08-22T16:45:03+09:00
     return datetime.now(UTC).astimezone().isoformat(timespec="seconds")
 
 
 def _write_csv(rows: Iterable[tuple[str, str, str]], out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["date", "url", "title", "fetched_at"])
+        w = csv.writer(f)
+        w.writerow(["date", "url", "title", "fetched_at"])
         for d, u, t in rows:
-            writer.writerow([d, u, t, _now_iso()])
+            w.writerow([d, u, t, _now_iso()])
+
+
+def _read_existing(p: Path) -> list[tuple[str, str, str]]:
+    if not p.exists():
+        return []
+    out: list[tuple[str, str, str]] = []
+    with p.open("r", encoding="utf-8", newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            d = (row.get("date") or "").strip()
+            u = (row.get("url") or "").strip()
+            t = (row.get("title") or "").strip()
+            if d and u and t:
+                out.append((d, u, t))
+    return out
+
+
+def _dedup_merge(
+    base: Iterable[tuple[str, str, str]],
+    add: Iterable[tuple[str, str, str]],
+) -> list[tuple[str, str, str]]:
+    """baseにaddをマージ。キー=(date,url,title) で重複排除。"""
+    seen: set[tuple[str, str, str]] = set(base)
+    merged: list[tuple[str, str, str]] = list(base)
+    for row in add:
+        if row not in seen:
+            merged.append(row)
+            seen.add(row)
+    return merged
 
 
 def main() -> int:
     root = _repo_root()
     targets_path = root / "automation" / "targets.txt"
-    out_csv = root / "data" / "titles.csv"
+    daily_dir = root / "data" / "daily"
+    cumulative_csv = root / "data" / "titles.csv"
 
     if not targets_path.exists():
         print(f"[ERR] not found: {targets_path}")
@@ -123,19 +169,37 @@ def main() -> int:
         print("[ERR] no valid urls in automation/targets.txt")
         return 2
 
+    sess = _create_session()
     today = date.today().isoformat()
-    result_rows: list[tuple[str, str, str]] = []
 
+    # 取得（同一URLは1回だけ）
+    seen_url: set[str] = set()
+    new_rows: list[tuple[str, str, str]] = []
     for url in urls:
-        title = _fetch(url)
+        if url in seen_url:
+            continue
+        seen_url.add(url)
+        title = _fetch(sess, url)
         if title:
             print(f"[OK] {url} -> {title}")
-            result_rows.append((today, url, title))
+            new_rows.append((today, url, title))
         else:
             print(f"[SKIP] {url} -> title not found")
 
-    _write_csv(result_rows, out_csv)
-    print(f"[OK] rows={len(result_rows)} written: {out_csv}")
+    # 日次CSV
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    daily_csv = daily_dir / f"titles-{today.replace('-', '')}.csv"
+    _write_csv(new_rows, daily_csv)
+
+    # 累積CSV（過去とマージして重複排除）
+    existing = _read_existing(cumulative_csv)
+    merged = _dedup_merge(existing, new_rows)
+    _write_csv(merged, cumulative_csv)
+
+    print(
+        f"[OK] daily_rows={len(new_rows)} written: {daily_csv} / "
+        f"cumulative_rows={len(merged)} -> {cumulative_csv}"
+    )
     return 0
 
 
