@@ -41,3 +41,4 @@ lxml
 types-requests
 types-urllib3
 pre-commit
+uvicorn[standard]
