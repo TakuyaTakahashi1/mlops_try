@@ -34,11 +34,11 @@ types-pytz==2025.2.0.20250516
 typing-inspection==0.4.1
 typing_extensions==4.14.0
 tzdata==2025.2
-uvicorn==0.34.3
+uvicorn[standard]==0.34.3
 requests
 beautifulsoup4
 lxml
 types-requests
 types-urllib3
 pre-commit
-uvicorn[standard]
+
