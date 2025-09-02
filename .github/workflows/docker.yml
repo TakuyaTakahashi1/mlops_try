@@ -3,6 +3,8 @@ name: Docker (GHCR)
 on:
   push:
     branches: [ main ]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
   pull_request:
     branches: [ main ]
 
@@ -36,16 +38,21 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/mlops_try
           tags: |
+            # 既存
             type=sha,format=long
             type=ref,event=pr
             type=raw,value=latest,enable={{is_default_branch}}
+            # 追加: タグ push のとき
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and (conditionally) push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
