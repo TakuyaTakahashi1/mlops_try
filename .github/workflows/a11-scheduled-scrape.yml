@@ -1,10 +1,9 @@
-name: "A11: scheduled scrape & PR"
+name: "A11: scheduled scrape name: A11: scheduled scrape & PR PR"
 
 on:
   schedule:
-    # UTC 00:00 = JST 09:00
-    - cron: '0 0 * * *'
-  workflow_dispatch: {}  # 手動実行
+    - cron: '0 0 * * *'   # UTC 00:00 = JST 09:00
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -19,18 +18,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
 
       - name: Install deps
         run: pip install -r requirements.txt
 
       - name: Create .env for script/tests
         run: |
-          printf "DB_URL=postgresql://example\nAPI_KEY=secret\n" > .env
+          cat > .env <<'ENV'
+          DB_URL=postgresql://example
+          API_KEY=secret
+          ENV
 
       - name: Run scraper
         run: python automation/scrape_titles.py
@@ -39,6 +40,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scraped-csv
+          if-no-files-found: ignore
           path: |
             data/titles.csv
             data/daily/*.csv
