@@ -1,0 +1,32 @@
+
+name: "CI notify PR on success"
+
+on:
+  workflow_run:
+    workflows: ["CI"]    # ← CIの“表示名”。違う場合はここを実際の表示名に合わせる
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  notify:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'chore/daily-scrape' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment to PR that CI finished
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const {owner, repo} = context.repo;
+            const head = `${owner}:${github.event.workflow_run.head_branch}`;
+            const prs = await github.paginate(github.rest.pulls.list, {owner, repo, state: 'open', head});
+            if (!prs.length) return;
+            const pr = prs[0];
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: pr.number,
+              body: `✅ CI finished successfully for \`${github.event.workflow_run.head_branch}\`.\nRun: ${github.event.workflow_run.html_url}`
+            });

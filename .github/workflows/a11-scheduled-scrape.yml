@@ -1,13 +1,16 @@
+
 name: "A11: scheduled scrape & PR"
 
 on:
   schedule:
-    - cron: '0 0 * * *'   # JST 09:00
+    # UTC 00:00 = JST 09:00
+    - cron: '0 0 * * *'
   workflow_dispatch: {}
 
 permissions:
   contents: write
   pull-requests: write
+  actions: write  # ← CI(workflow_dispatch)を叩くのに必要
 
 concurrency:
   group: a11-scrape
@@ -46,29 +49,54 @@ jobs:
             data/titles.csv
             data/daily/*.csv
 
+      # PRを作成/更新（固定ブランチで“常に1つのPR”にする）
       - name: Create PR with changes
+        id: cpr
         uses: peter-evans/create-pull-request@v6
         with:
-          branch: chore/daily-scrape
           commit-message: "chore(data): daily scrape"
+          branch: chore/daily-scrape
           title: "A11: daily scrape (data/titles.csv)"
           body: |
             ## Summary
-            毎日 09:00 JST に `automation/scrape_titles.py` を実行し、結果をコミットして本PR（固定ブランチ `chore/daily-scrape`）を更新します。
+            毎日 09:00 JST に `automation/scrape_titles.py` を実行し、結果をコミットしてこのPR（`chore/daily-scrape`）を更新します。
 
             ## Changes
             - `data/daily/titles-YYYYMMDD.csv` を追加
             - `data/titles.csv` にマージ（重複除去）
 
             ## Why
-            データセットを自動で新鮮に保つため（手動更新を排除）。
+            データセットを自動で新鮮に保つため（手動更新の排除）。
 
             ## How to verify
-            - このPRに本日分のCSVが含まれていること
+            - このPRに当日分のCSVが含まれていること
             - Checks（lint, mypy, test 3.11/3.12）が緑であること
-
-            ## Notes
-            - ラベル: `automation`, `data`
-            - 既存のPRがある場合は更新（新規作成しない）仕様
           labels: data, automation
-          delete-branch: true
+          delete-branch: false
+
+      # 作成/更新した PR ブランチで CI（ci.yml）を手動トリガ
+      - name: Trigger CI on PR branch
+        if: steps.cpr.outputs.pull-request-number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',   // ← CIワークフロー“ファイル名”
+              ref: 'chore/daily-scrape'
+            });
+
+      # A11 実行完了＆CI起動をPRにコメントで通知
+      - name: Notify on PR (dispatched CI)
+        if: steps.cpr.outputs.pull-request-number != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ steps.cpr.outputs.pull-request-number }}
+          body: |
+            ✅ A11 finished. CI has been triggered for \`chore/daily-scrape\`.
+            - Scheduler run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - CI will appear in **Checks** on this PR.
+            @TakuyaTakahashi1
