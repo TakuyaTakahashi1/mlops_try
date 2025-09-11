@@ -2,7 +2,7 @@ name: "A11: scheduled scrape & PR"
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # UTC 00:00 = JST 09:00
+    - cron: '0 0 * * *'   # JST 09:00
   workflow_dispatch: {}
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
 
       - name: Install deps
         run: pip install -r requirements.txt
@@ -49,22 +49,26 @@ jobs:
       - name: Create PR with changes
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "chore(data): daily scrape"
           branch: chore/daily-scrape
+          commit-message: "chore(data): daily scrape"
           title: "A11: daily scrape (data/titles.csv)"
           body: |
             ## Summary
-            Run automation/scrape_titles.py daily (09:00 JST), commit results, and open a PR.
+            毎日 09:00 JST に `automation/scrape_titles.py` を実行し、結果をコミットして本PR（固定ブランチ `chore/daily-scrape`）を更新します。
 
             ## Changes
-            - Update data/daily/titles-YYYYMMDD.csv
-            - Merge into data/titles.csv (dedup)
+            - `data/daily/titles-YYYYMMDD.csv` を追加
+            - `data/titles.csv` にマージ（重複除去）
 
             ## Why
-            Keep the dataset fresh automatically.
+            データセットを自動で新鮮に保つため（手動更新を排除）。
 
             ## How to verify
-            - This PR includes updated CSVs with today's date.
-            - CI checks are green.
+            - このPRに本日分のCSVが含まれていること
+            - Checks（lint, mypy, test 3.11/3.12）が緑であること
+
+            ## Notes
+            - ラベル: `automation`, `data`
+            - 既存のPRがある場合は更新（新規作成しない）仕様
           labels: data, automation
           delete-branch: true
