@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'   # タグ v1.2.3 などで起動
 
 permissions:
   contents: write
@@ -15,6 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ref名から v を外した VERSION を安全に作る（式で replace は使えないためシェルで処理）
+      - name: Derive VERSION
+        id: ver
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" == v* ]]; then
+            ver="${ref#v}"
+          else
+            ver="$ref"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -25,30 +37,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
+      # 画像名: ghcr.io/<owner>/<repo>
+      - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/mlops_try
+          images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=${{ github.ref_name }}             # v0.3.1
-            type=semver,pattern={{version}},value=${{ github.ref_name }}    # 0.3.1
-            type=semver,pattern={{major}}.{{minor}},value=${{ github.ref_name }}  # 0.3
-            type=raw,value=latest,enable=false
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=latest
 
-      - name: Build & Push (tag)
-        uses: docker/build-push-action@v6
+      - name: Build and push
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-            APP_VERSION=${{ startsWith(github.ref_name, 'v') && replace(github.ref_name, 'v', '') || github.ref_name }}
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
