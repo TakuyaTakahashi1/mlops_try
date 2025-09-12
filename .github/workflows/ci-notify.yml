@@ -1,32 +1,42 @@
-
-name: "CI notify PR on success"
+name: CI notify PR on success
 
 on:
   workflow_run:
-    workflows: ["CI"]    # ← CIの“表示名”。違う場合はここを実際の表示名に合わせる
+    workflows: ["CI"]
     types: [completed]
 
 permissions:
-  actions: read
   contents: read
-  pull-requests: write
+  pull-requests: read
+  issues: write
 
 jobs:
   notify:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'chore/daily-scrape' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Comment to PR that CI finished
+      - name: "Comment to PR that CI finished"
         uses: actions/github-script@v7
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const {owner, repo} = context.repo;
-            const head = `${owner}:${github.event.workflow_run.head_branch}`;
-            const prs = await github.paginate(github.rest.pulls.list, {owner, repo, state: 'open', head});
-            if (!prs.length) return;
-            const pr = prs[0];
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: pr.number,
-              body: `✅ CI finished successfully for \`${github.event.workflow_run.head_branch}\`.\nRun: ${github.event.workflow_run.html_url}`
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+            const head = process.env.HEAD_BRANCH;
+            if (head !== 'chore/daily-scrape') {
+              core.info(`Head branch ${head} is not chore/daily-scrape. Skip.`);
+              return;
+            }
+            const { data: prs } = await github.rest.pulls.list({
+              owner, repo, state: 'open',
+              head: `${owner}:${head}`, base: 'main'
             });
+            if (!prs.length) {
+              core.info('No open PR from chore/daily-scrape. Skip.');
+              return;
+            }
+            const pr = prs[0];
+            const body = `✅ CI passed for \`${head}\`.\n\n[View run](${process.env.RUN_URL})`;
+            await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
