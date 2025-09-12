@@ -7,47 +7,36 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
   issues: write
 
 jobs:
   notify:
-    # CI が成功したときだけ動かす（イベント側の式で判定）
-    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    # payload を直接触らず、式で取れる値だけを env に渡す
-    env:
-      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
-      RUN_HTML_URL: ${{ github.event.workflow_run.html_url   || '' }}
     steps:
-      - name: Comment to PR that CI finished
+      - name: "Comment to PR that CI finished"
         uses: actions/github-script@v7
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
         with:
           script: |
-            const owner = context.repo.owner;
-            const repo  = context.repo.repo;
-
-            const headBranch = process.env.HEAD_BRANCH || '';
-            const runUrl     = process.env.RUN_HTML_URL || '';
-
-            if (!headBranch) {
-              core.info('No head_branch in event payload. Exit gracefully.');
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+            const head = process.env.HEAD_BRANCH;
+            if (head !== 'chore/daily-scrape') {
+              core.info(`Head branch ${head} is not chore/daily-scrape. Skip.`);
               return;
             }
-
-            // 固定ブランチのオープンPRを探す
-            const prs = await github.paginate(github.rest.pulls.list, {
-              owner, repo, state: 'open', head: `${owner}:chore/daily-scrape`
+            const { data: prs } = await github.rest.pulls.list({
+              owner, repo, state: 'open',
+              head: `${owner}:${head}`, base: 'main'
             });
             if (!prs.length) {
               core.info('No open PR from chore/daily-scrape. Skip.');
               return;
             }
-
             const pr = prs[0];
-            const body =
-              `✅ CI passed for \`${headBranch}\`.\n\n` +
-              (runUrl ? `Run: ${runUrl}` : '');
-
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: pr.number, body
-            });
+            const body = `✅ CI passed for \`${head}\`.\n\n[View run](${process.env.RUN_URL})`;
+            await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
