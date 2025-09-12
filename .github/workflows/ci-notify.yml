@@ -1,32 +1,43 @@
-
-name: "CI notify PR on success"
+name: CI notify PR on success
 
 on:
   workflow_run:
-    workflows: ["CI"]    # ← CIの“表示名”。違う場合はここを実際の表示名に合わせる
+    workflows: ["CI"]        # ci.yml が完了したら起動
     types: [completed]
 
 permissions:
-  actions: read
   contents: read
+  issues: write
   pull-requests: write
 
 jobs:
   notify:
+    # CI が成功 かつ 対象ブランチが chore/daily-scrape のときだけ実行
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'chore/daily-scrape' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Comment to PR that CI finished
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const {owner, repo} = context.repo;
-            const head = `${owner}:${github.event.workflow_run.head_branch}`;
-            const prs = await github.paginate(github.rest.pulls.list, {owner, repo, state: 'open', head});
-            if (!prs.length) return;
-            const pr = prs[0];
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: pr.number,
-              body: `✅ CI finished successfully for \`${github.event.workflow_run.head_branch}\`.\nRun: ${github.event.workflow_run.html_url}`
-            });
+      - name: "Find open PR (head chore/daily-scrape)"
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head chore/daily-scrape --json number --jq '.[0].number')
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            echo "found=true"  >> $GITHUB_OUTPUT
+            echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post comment to PR
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}"
+          gh issue comment ${{ steps.find.outputs.number }} --body "✅ CI succeeded for \`chore/daily-scrape\`. [View run]($RUN_URL)"
+
+      - name: No open PR - skip notify
+        if: steps.find.outputs.found != 'true'
+        run: echo "No open PR (chore/daily-scrape). Skipping."
