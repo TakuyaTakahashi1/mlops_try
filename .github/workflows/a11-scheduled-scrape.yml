@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # main を取り込み → 差分があれば chore/daily-scrape に push（再発防止の肝）
+      # ★ 再発防止：main取り込み → 差分があれば push
       - name: Sync fixed branch with main (and push)
         run: |
           set -e
