@@ -17,6 +17,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ★毎回、固定ブランチに main を取り込む（CI定義のズレ防止）
+      - name: Sync fixed branch with main
+        run: |
+          git fetch origin
+          git checkout -B chore/daily-scrape origin/chore/daily-scrape || git checkout -B chore/daily-scrape
+          git merge origin/main --no-edit || true
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -28,8 +35,7 @@ jobs:
           mkdir -p data
 
       - name: Run scraper
-        run: |
-          python automation/scrape_titles.py
+        run: python automation/scrape_titles.py
 
       - name: Create or update fixed PR
         uses: peter-evans/create-pull-request@v7
