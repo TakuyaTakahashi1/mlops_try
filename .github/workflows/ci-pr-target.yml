@@ -1,0 +1,72 @@
+name: CI (PR target)
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    branches: [main]   # main への PR なら必ず発火（PR側の定義に依存しない）
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}  # PRのHEADをチェックアウト
+      - run: pip install ruff
+      - run: ruff check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          pip install -r requirements.txt || true
+          pip install mypy pandas-stubs
+      - run: mypy .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11','3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: |
+          pip install -r requirements.txt || true
+          pip install pytest pytest-cov
+      - run: pytest --maxfail=1 --disable-warnings -q --cov=. --cov-report=term-missing
+
+  notify:
+    name: Notify on PR (CI passed)
+    if: ${{ success() }}
+    needs: [lint, typecheck, test]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: `✅ CI passed for \`${pr.head.ref}\`. [View run](${runUrl})`
+            })
