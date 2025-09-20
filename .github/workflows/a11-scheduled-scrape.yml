@@ -17,12 +17,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ★毎回、固定ブランチに main を取り込む（CI定義のズレ防止）
-      - name: Sync fixed branch with main
+      # main を取り込み → 差分があれば chore/daily-scrape に push（再発防止の肝）
+      - name: Sync fixed branch with main (and push)
         run: |
+          set -e
           git fetch origin
           git checkout -B chore/daily-scrape origin/chore/daily-scrape || git checkout -B chore/daily-scrape
           git merge origin/main --no-edit || true
+          if ! git diff --quiet origin/chore/daily-scrape..HEAD; then
+            git push origin chore/daily-scrape
+          fi
 
       - uses: actions/setup-python@v5
         with:
