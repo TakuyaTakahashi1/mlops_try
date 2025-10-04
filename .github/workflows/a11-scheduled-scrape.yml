@@ -2,52 +2,72 @@ name: "A11: scheduled scrape & PR"
 
 on:
   schedule:
-    - cron: '30 22 * * *'  # 07:30 JST
-  workflow_dispatch:
+    - cron: "30 22 * * *"   # JST 07:30（UTC固定）
+  workflow_dispatch: {}
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: a11-scheduled
+  cancel-in-progress: false
+
 jobs:
   scrape-and-pr:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: "3.11"
 
-      # ★ 再発防止：main取り込み → 差分があれば push
-      - name: Sync fixed branch with main (and push)
+      - name: Install deps
         run: |
-          set -e
-          git fetch origin
-          git checkout -B chore/daily-scrape origin/chore/daily-scrape || git checkout -B chore/daily-scrape
-          git merge origin/main --no-edit || true
-          if ! git diff --quiet origin/chore/daily-scrape..HEAD; then
-            git push origin chore/daily-scrape
-          fi
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install deps for scraping
-        run: |
-          pip install -r requirements.txt || true
-          pip install requests beautifulsoup4 lxml
-          mkdir -p data
+          python -m pip install -U pip wheel setuptools
+          pip install -r requirements.txt
 
       - name: Run scraper
-        run: python automation/scrape_titles.py
+        id: run_scraper
+        run: |
+          python -m automation.scrape_titles --targets automation/targets.txt --outdir data | tee run.log
+          echo "log<<EOF" >> $GITHUB_OUTPUT
+          sed -n '1,200p' run.log >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create or update fixed PR
-        uses: peter-evans/create-pull-request@v7
+      - name: Prepare meta (UTC)
+        run: |
+          echo "UTC_DATE=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
+          echo "UTC_YMD=$(date -u +%Y%m%d)" >> $GITHUB_ENV
+          echo "UTC_TS=$(date -u +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+          echo "DAILY_BRANCH=auto/a11/daily-$(date -u +%Y%m%d)" >> $GITHUB_ENV
+
+      - name: Show head of outputs (debug)
+        if: always()
+        run: |
+          ls -l data || true
+          ls -1 data/titles-*.csv 2>/dev/null | tail -n 1 | xargs -I{} sh -c 'echo "----- daily -----"; head -n 5 "{}"' || true
+          echo "----- cumulative -----"; head -n 5 data/titles.csv || true
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
         with:
-          branch: chore/daily-scrape
-          base: main
-          title: 'chore: daily scrape'
-          commit-message: 'chore: daily scrape'
-          body: 'Automated daily scrape'
-          labels: automation
-          delete-branch: false
+          commit-message: "A11: daily scrape ${{ env.UTC_DATE }} (UTC)"
+          title: "A11: daily scrape ${{ env.UTC_DATE }}"
+          body: |
+            Automated run at (UTC): ${{ env.UTC_TS }}
+            - Includes: data/titles-${{ env.UTC_YMD }}.csv
+            - See run log below.
+            <details><summary>log</summary>
+
+            ${{ steps.run_scraper.outputs.log }}
+
+            </details>
+          branch: "${{ env.DAILY_BRANCH }}"
+          delete-branch: true
+          labels: |
+            automation
+            A11
