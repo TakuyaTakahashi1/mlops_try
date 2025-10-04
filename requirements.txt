@@ -43,3 +43,7 @@ types-urllib3
 pre-commit
 
 pytest-xdist
+
+requests
+beautifulsoup4
+lxml
