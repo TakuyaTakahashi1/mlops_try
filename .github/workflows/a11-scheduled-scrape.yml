@@ -3,11 +3,17 @@ name: "A11: scheduled scrape & PR"
 on:
   schedule:
     - cron: "30 22 * * *"   # JST 07:30（UTC固定）
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force_zero:
+        description: "Test A12: treat collected as 0 and trigger zero-rows path"
+        required: false
+        default: "false"
 
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 concurrency:
   group: a11-scheduled
@@ -34,6 +40,18 @@ jobs:
         id: run_scraper
         run: |
           python -m automation.scrape_titles --targets automation/targets.txt --outdir data | tee run.log
+
+          # ---- A12: 件数抽出（collected） ----
+          DAILY_ROWS=$(grep -Eo 'daily_rows=[0-9]+' run.log | head -n1 | cut -d= -f2 || true)
+          if [ -z "$DAILY_ROWS" ]; then DAILY_ROWS="unknown"; fi
+
+          # 手動テスト用フラグ（force_zero=true なら 0 に書き換え）
+          FORCE_ZERO="${{ github.event.inputs.force_zero }}"
+          if [ "$FORCE_ZERO" = "true" ]; then DAILY_ROWS="0"; fi
+
+          echo "collected=$DAILY_ROWS" >> $GITHUB_OUTPUT
+
+          # PR本文用ログ
           echo "log<<EOF" >> $GITHUB_OUTPUT
           sed -n '1,200p' run.log >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -59,6 +77,7 @@ jobs:
           title: "A11: daily scrape ${{ env.UTC_DATE }}"
           body: |
             Automated run at (UTC): ${{ env.UTC_TS }}
+            **collected = ${{ steps.run_scraper.outputs.collected }}**
             - Includes: data/titles-${{ env.UTC_YMD }}.csv
             - See run log below.
             <details><summary>log</summary>
@@ -71,3 +90,61 @@ jobs:
           labels: |
             automation
             A11
+
+      # ---- A12: 0件検知 → Issue作成/更新（48h以内の既存アラートがあればコメント追記）----
+      - name: A12 zero-rows notify (issue)
+        if: ${{ success() && steps.run_scraper.outputs.collected == '0' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const title = `A12: daily_rows=0 on ${process.env.UTC_DATE} (UTC)`;
+            const body = [
+              `Detected zero rows.`,
+              `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              `When: ${process.env.UTC_TS} (UTC)`,
+              '',
+              'If this is the second consecutive day, please investigate targets/network.'
+            ].join('\n');
+
+            // 検索：48h以内に作られた open の zero-rows アラート
+            const q = `repo:${owner}/${repo} is:issue is:open label:A12 label:zero-rows`;
+            const res = await github.rest.search.issuesAndPullRequests({ q, per_page: 10 });
+            const now = Date.now();
+            const recent = res.data.items.find(i => (now - new Date(i.created_at).getTime()) < 1000*60*60*48);
+
+            if (recent) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: recent.number, body: `Another zero rows within 48h. Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}` });
+              try {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: recent.number, labels: ['consecutive-2'] });
+              } catch (_) {}
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, body,
+                labels: ['A12','zero-rows']
+              });
+            }
+
+  # ---- A12: 失敗時通知（別ジョブ、失敗時のみ起動）----
+  notify-on-failure:
+    needs: scrape-and-pr
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: A12 failure notify (issue)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const title = `A12: scheduled scrape FAILED (run #${context.runNumber})`;
+            const body = [
+              `Workflow: ${context.workflow}`,
+              `Branch/Ref: ${context.ref}`,
+              `Run URL: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
+            ].join('\n');
+            await github.rest.issues.create({
+              owner, repo, title, body,
+              labels: ['A12','failure']
+            });
