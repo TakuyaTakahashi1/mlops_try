@@ -114,7 +114,10 @@ jobs:
             const recent = res.data.items.find(i => (now - new Date(i.created_at).getTime()) < 1000*60*60*48);
 
             if (recent) {
-              await github.rest.issues.createComment({ owner, repo, issue_number: recent.number, body: `Another zero rows within 48h. Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}` });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: recent.number,
+                body: `Another zero rows within 48h. Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
+              });
               try {
                 await github.rest.issues.addLabels({ owner, repo, issue_number: recent.number, labels: ['consecutive-2'] });
               } catch (_) {}
