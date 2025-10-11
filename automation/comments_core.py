@@ -12,17 +12,21 @@ import requests
 from bs4 import BeautifulSoup
 
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    ),
     "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
 }
 
+HTTP_TIMEOUT = 15
+MAX_RETRIES = 3
 
-def make_session(retries: int = 3, timeout: int = 15) -> requests.Session:
+
+def make_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(DEFAULT_HEADERS)
-    s.request_timeout = timeout  # type: ignore[attr-defined]
-    s.max_retries = retries  # type: ignore[attr-defined]
     return s
 
 
@@ -37,12 +41,12 @@ class Comment:
 
     @staticmethod
     def mk_id(source_url: str, content: str, posted_at: str | None) -> str:
-        base = source_url + "|" + (posted_at or "") + "|" + content.strip()
+        base = f"{source_url}|{posted_at or ''}|{content.strip()}"
         return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
 
 DATE_PATTERNS = [
-    re.compile(r"\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}"),  # 2025/10/11 07:30
+    re.compile(r"\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}"),
     re.compile(r"\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}"),
 ]
 
@@ -52,9 +56,10 @@ def _extract_datetime(text: str) -> str | None:
         m = pat.search(text)
         if m:
             raw = m.group(0).replace("-", "/")
-            yyyy, mm, dd, hh, mi = re.match(
-                r"(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})", raw
-            ).groups()  # type: ignore
+            g = re.match(r"(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})", raw)
+            if not g:
+                continue
+            yyyy, mm, dd, hh, mi = g.groups()
             dt = datetime(int(yyyy), int(mm), int(dd), int(hh), int(mi), tzinfo=UTC)
             return dt.isoformat()
     return None
@@ -63,9 +68,10 @@ def _extract_datetime(text: str) -> str | None:
 def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
     s = make_session()
     last_err: Exception | None = None
-    for attempt in range(getattr(s, "max_retries", 3)):  # type: ignore
+
+    for attempt in range(MAX_RETRIES):
         try:
-            r = s.get(url, timeout=getattr(s, "request_timeout", 15))  # type: ignore
+            r = s.get(url, timeout=HTTP_TIMEOUT)
             r.raise_for_status()
             html = r.text
             soup = BeautifulSoup(html, "lxml")
@@ -79,16 +85,15 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                 )
                 containers = [h.find_next(["ul", "ol", "div"])] if h else []
 
-            items = []
+            items: list = []
             for c in containers:
                 if c is None:
                     continue
                 items.extend(c.select("li"))
                 items.extend(c.select(".comment"))
                 items.extend(c.select(".comment-item"))
-
             if not items and containers:
-                items = containers
+                items = containers  # container自体が1件のケース
 
             comments: list[Comment] = []
             now_iso = datetime.now(UTC).isoformat()
@@ -97,13 +102,13 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                 text = " ".join(node.get_text(" ", strip=True).split())
                 if not text:
                     continue
-                author = None
+
                 author_node = node.select_one(".author, .comment-author, .commenter, .name")
-                if author_node:
-                    author = author_node.get_text(strip=True)
-                dt = None
+                author = author_node.get_text(strip=True) if author_node else None
+
+                dt: str | None = None
                 time_node = node.find("time")
-                if time_node and (time_node.get("datetime") or time_node.get_text(strip=True)):
+                if time_node:
                     dt = time_node.get("datetime") or _extract_datetime(
                         time_node.get_text(" ", strip=True)
                     )
@@ -122,15 +127,15 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                     )
                 )
 
-            uniq = {}
+            uniq: dict[str, Comment] = {}
             for c in comments:
                 uniq[c.comment_id] = c
-            comments = list(uniq.values())
+            return list(uniq.values())[:take]
 
-            return comments[:take]
         except Exception as e:
             last_err = e
             time.sleep(1.5 * (attempt + 1))
+
     raise RuntimeError(f"failed to fetch comments: {last_err}")
 
 
@@ -159,19 +164,19 @@ def write_csvs(rows: list[Comment], outdir: str = "data") -> None:
                     ]
                 )
 
+    # 日次は毎回作り直し
     dump(daily, rows, "w")
 
-    seen = set()
+    # 累積は重複排除で追記
+    seen: set[str] = set()
     if os.path.exists(cum):
         with open(cum, newline="", encoding="utf-8") as f:
             for i, row in enumerate(csv.reader(f)):
-                if i == 0:
+                if i == 0 or not row:
                     continue
-                if row:
-                    seen.add(row[0])
+                seen.add(row[0])
     new_rows = [c for c in rows if c.comment_id not in seen]
     if not os.path.exists(cum):
         dump(cum, rows, "w")
-    else:
-        if new_rows:
-            dump(cum, new_rows, "a")
+    elif new_rows:
+        dump(cum, new_rows, "a")
