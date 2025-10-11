@@ -9,3 +9,6 @@ PY
 
 # scrape outputs
 /data/*.csv
+
+# editor backups
+*.save

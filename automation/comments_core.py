@@ -7,6 +7,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 import requests
 from bs4 import BeautifulSoup
@@ -74,13 +75,15 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
         try:
             r = s.get(url, timeout=HTTP_TIMEOUT)
             r.raise_for_status()
-            html = r.text
-            soup = BeautifulSoup(html, "lxml")
+            soup = BeautifulSoup(r.text, "lxml")
 
             # コメントコンテナ候補
-            containers: list[Tag] = list(
-                soup.select(
-                    "#comments, #comment, .comments, .commentlist, .pcomment, .comment-area"
+            containers = list(
+                cast(
+                    list[Tag],
+                    soup.select(
+                        "#comments, #comment, .comments, .commentlist, .pcomment, .comment-area"
+                    ),
                 )
             )
             if not containers:
@@ -89,18 +92,19 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                 )
                 if h:
                     nxt = h.find_next(["ul", "ol", "div"])
-                    containers = [nxt] if isinstance(nxt, Tag) else []
-                else:
-                    containers = []
+                    if isinstance(nxt, Tag):
+                        containers = [nxt]
+                    else:
+                        containers = []
 
             # 各コンテナからコメント要素を拾う
             items: list[Tag] = []
             for c in containers:
-                items.extend(c.select("li"))
-                items.extend(c.select(".comment"))
-                items.extend(c.select(".comment-item"))
+                items.extend(cast(list[Tag], c.select("li")))
+                items.extend(cast(list[Tag], c.select(".comment")))
+                items.extend(cast(list[Tag], c.select(".comment-item")))
 
-            # container自体が1件（詳細直下に情報を持つ）ケース
+            # container自体が1件のケース
             if not items and containers:
                 items = containers
 
@@ -156,14 +160,7 @@ def write_csvs(rows: list[Comment], outdir: str = "data") -> None:
     cum = os.path.join(outdir, "comments.csv")
 
     def dump(path: str, data: list[Comment], mode: str) -> None:
-        header = [
-            "comment_id",
-            "source_url",
-            "author",
-            "content",
-            "posted_at",
-            "collected_at",
-        ]
+        header = ["comment_id", "source_url", "author", "content", "posted_at", "collected_at"]
         exists = os.path.exists(path)
         with open(path, mode, newline="", encoding="utf-8") as f:
             w = csv.writer(f)
