@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 import requests
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -76,24 +77,32 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
             html = r.text
             soup = BeautifulSoup(html, "lxml")
 
-            containers = soup.select(
-                "#comments, #comment, .comments, .commentlist, .pcomment, .comment-area"
+            # コメントコンテナ候補
+            containers: list[Tag] = list(
+                soup.select(
+                    "#comments, #comment, .comments, .commentlist, .pcomment, .comment-area"
+                )
             )
             if not containers:
                 h = soup.find(
                     lambda tag: tag.name in ("h2", "h3", "h4") and "コメント" in tag.get_text()
                 )
-                containers = [h.find_next(["ul", "ol", "div"])] if h else []
+                if h:
+                    nxt = h.find_next(["ul", "ol", "div"])
+                    containers = [nxt] if isinstance(nxt, Tag) else []
+                else:
+                    containers = []
 
-            items: list = []
+            # 各コンテナからコメント要素を拾う
+            items: list[Tag] = []
             for c in containers:
-                if c is None:
-                    continue
                 items.extend(c.select("li"))
                 items.extend(c.select(".comment"))
                 items.extend(c.select(".comment-item"))
+
+            # container自体が1件（詳細直下に情報を持つ）ケース
             if not items and containers:
-                items = containers  # container自体が1件のケース
+                items = containers
 
             comments: list[Comment] = []
             now_iso = datetime.now(UTC).isoformat()
@@ -127,6 +136,7 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                     )
                 )
 
+            # 重複除去
             uniq: dict[str, Comment] = {}
             for c in comments:
                 uniq[c.comment_id] = c
@@ -146,7 +156,14 @@ def write_csvs(rows: list[Comment], outdir: str = "data") -> None:
     cum = os.path.join(outdir, "comments.csv")
 
     def dump(path: str, data: list[Comment], mode: str) -> None:
-        header = ["comment_id", "source_url", "author", "content", "posted_at", "collected_at"]
+        header = [
+            "comment_id",
+            "source_url",
+            "author",
+            "content",
+            "posted_at",
+            "collected_at",
+        ]
         exists = os.path.exists(path)
         with open(path, mode, newline="", encoding="utf-8") as f:
             w = csv.writer(f)
