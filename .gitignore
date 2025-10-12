@@ -12,3 +12,7 @@ PY
 
 # editor backups
 *.save
+
+# track A12 comment CSVs
+!data/comments.csv
+!data/comments-*.csv
