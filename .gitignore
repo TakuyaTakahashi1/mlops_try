@@ -6,3 +6,9 @@ __pycache__/
 /n# editor backups/n*.sabe/n
 .github/workflows/*.bak*
 PY
+
+# scrape outputs
+/data/*.csv
+
+# editor backups
+*.save
