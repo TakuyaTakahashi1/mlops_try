@@ -92,17 +92,14 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                 )
                 if h:
                     nxt = h.find_next(["ul", "ol", "div"])
-                    if isinstance(nxt, Tag):
-                        containers = [nxt]
-                    else:
-                        containers = []
+                    containers = [nxt] if isinstance(nxt, Tag) else []
 
             # 各コンテナからコメント要素を拾う
             items: list[Tag] = []
-            for c in containers:
-                items.extend(cast(list[Tag], c.select("li")))
-                items.extend(cast(list[Tag], c.select(".comment")))
-                items.extend(cast(list[Tag], c.select(".comment-item")))
+            for cont in containers:
+                items.extend(cast(list[Tag], cont.select("li")))
+                items.extend(cast(list[Tag], cont.select(".comment")))
+                items.extend(cast(list[Tag], cont.select(".comment-item")))
 
             # container自体が1件のケース
             if not items and containers:
@@ -122,9 +119,10 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                 dt: str | None = None
                 time_node = node.find("time")
                 if time_node:
-                    dt = time_node.get("datetime") or _extract_datetime(
-                        time_node.get_text(" ", strip=True)
-                    )
+                    # time.get() は str | list | None を返す可能性があるため str に絞る
+                    attr = time_node.get("datetime")
+                    attr_str = attr if isinstance(attr, str) else None
+                    dt = attr_str or _extract_datetime(time_node.get_text(" ", strip=True))
                 if not dt:
                     dt = _extract_datetime(text)
 
@@ -142,8 +140,8 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
 
             # 重複除去
             uniq: dict[str, Comment] = {}
-            for c in comments:
-                uniq[c.comment_id] = c
+            for cm in comments:
+                uniq[cm.comment_id] = cm
             return list(uniq.values())[:take]
 
         except Exception as e:
