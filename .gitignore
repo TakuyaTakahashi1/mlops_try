@@ -12,3 +12,5 @@ PY
 
 # editor backups
 *.save
+!data/comments.csv
+!data/comments-*.csv
