@@ -1,4 +1,4 @@
 [OK] https://www.example.com/ -> Example Domain
 [OK] https://www.python.org/ -> Welcome to Python.org
 [OK] https://kamikouryaku.net/nightreign_eldenring/?%E3%83%AC%E3%83%87%E3%82%A3 -> レディ
-[OK] daily_rows=3 written: /home/runner/work/mlops_try/mlops_try/data/daily/titles-20251011.csv / cumulative_rows=67 -> /home/runner/work/mlops_try/mlops_try/data/titles.csv
+[OK] daily_rows=3 written: /home/runner/work/mlops_try/mlops_try/data/daily/titles-20251014.csv / cumulative_rows=70 -> /home/runner/work/mlops_try/mlops_try/data/titles.csv
