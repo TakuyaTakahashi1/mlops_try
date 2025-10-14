@@ -68,6 +68,7 @@ def _extract_datetime(text: str) -> str | None:
 
 
 def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
+    """対象URLから最新コメントを取得（デフォルト5件）。"""
     s = make_session()
     last_err: Exception | None = None
 
@@ -77,52 +78,67 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "lxml")
 
-            # コメントコンテナ候補
-            containers = list(
-                cast(
-                    list[Tag],
-                    soup.select(
-                        "#comments, #comment, .comments, .commentlist, .pcomment, .comment-area"
-                    ),
+            # --- 「最新の20件」領域を最優先で探索 ---
+            # 例: <ul id="commentlist">…</ul> / <div id="comment"> … <div class="comment">…</div>
+            priority_items: list[Tag] = []
+            priority_items.extend(cast(list[Tag], soup.select("ul#commentlist > li")))
+            priority_items.extend(cast(list[Tag], soup.select("#comment .comment")))
+            # 上記で拾えなければ従来セレクタへフォールバック
+            containers: list[Tag] = []
+            if not priority_items:
+                containers = list(
+                    cast(
+                        list[Tag],
+                        soup.select(
+                            "#comments, #comment, .comments, .commentlist, .pcomment, .comment-area"
+                        ),
+                    )
                 )
-            )
-            if not containers:
-                h = soup.find(
-                    lambda tag: tag.name in ("h2", "h3", "h4") and "コメント" in tag.get_text()
-                )
-                if h:
-                    nxt = h.find_next(["ul", "ol", "div"])
-                    containers = [nxt] if isinstance(nxt, Tag) else []
+                if not containers:
+                    # 「コメント」という見出しの直後のUL/OL/DIVを推測
+                    h = soup.find(
+                        lambda tag: tag.name in ("h2", "h3", "h4") and "コメント" in tag.get_text()
+                    )
+                    if h:
+                        nxt = h.find_next(["ul", "ol", "div"])
+                        if isinstance(nxt, Tag):
+                            containers = [nxt]
 
-            # 各コンテナからコメント要素を拾う
+            # 候補ノードを1つの配列 items にまとめる
             items: list[Tag] = []
-            for cont in containers:
-                items.extend(cast(list[Tag], cont.select("li")))
-                items.extend(cast(list[Tag], cont.select(".comment")))
-                items.extend(cast(list[Tag], cont.select(".comment-item")))
-
-            # container自体が1件のケース
-            if not items and containers:
-                items = containers
+            if priority_items:
+                items = priority_items
+            else:
+                for c in containers:
+                    items.extend(cast(list[Tag], c.select("li")))
+                    items.extend(cast(list[Tag], c.select(".comment")))
+                    items.extend(cast(list[Tag], c.select(".comment-item")))
+                if not items and containers:
+                    # コンテナ自体がコメント1件のケース
+                    items = containers
 
             comments: list[Comment] = []
             now_iso = datetime.now(UTC).isoformat()
 
-            for node in items:
+            for node in items[: max(take, 0) or 0]:  # 念のため件数制限
+                # テキスト全体（改行/空白詰め）
                 text = " ".join(node.get_text(" ", strip=True).split())
                 if not text:
                     continue
 
-                author_node = node.select_one(".author, .comment-author, .commenter, .name")
+                # 著者候補
+                author_node = node.select_one(
+                    ".author, .comment-author, .commenter, .name, cite.fn, .comment-name"
+                )
                 author = author_node.get_text(strip=True) if author_node else None
 
+                # 時刻（time要素 or テキストから推定）
                 dt: str | None = None
                 time_node = node.find("time")
                 if time_node:
-                    # time.get() は str | list | None を返す可能性があるため str に絞る
-                    attr = time_node.get("datetime")
-                    attr_str = attr if isinstance(attr, str) else None
-                    dt = attr_str or _extract_datetime(time_node.get_text(" ", strip=True))
+                    dt = time_node.get("datetime") or _extract_datetime(
+                        time_node.get_text(" ", strip=True)
+                    )
                 if not dt:
                     dt = _extract_datetime(text)
 
@@ -138,10 +154,10 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                     )
                 )
 
-            # 重複除去
+            # 重複除去（comment_idでuniq）
             uniq: dict[str, Comment] = {}
-            for cm in comments:
-                uniq[cm.comment_id] = cm
+            for c in comments:
+                uniq[c.comment_id] = c
             return list(uniq.values())[:take]
 
         except Exception as e:
