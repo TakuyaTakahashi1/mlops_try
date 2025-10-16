@@ -6,7 +6,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime
 from typing import cast
 
 import requests
@@ -22,7 +22,7 @@ DEFAULT_HEADERS = {
     "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
 }
 
-HTTP_TIMEOUT = 20
+HTTP_TIMEOUT = 15
 MAX_RETRIES = 3
 
 
@@ -38,8 +38,8 @@ class Comment:
     source_url: str
     author: str | None
     content: str
-    posted_at: str | None  # ISO (UTC) or None
-    collected_at: str  # ISO (UTC)
+    posted_at: str | None  # ISO文字列 or None（UTC想定）
+    collected_at: str  # UTC ISO
 
     @staticmethod
     def mk_id(source_url: str, content: str, posted_at: str | None) -> str:
@@ -47,75 +47,27 @@ class Comment:
         return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
 
-# 例: 2025-10-13 (月) 22:56:57
-JST_COMMENT_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})\s+\([^)]*\)\s+(\d{2}):(\d{2}):(\d{2})")
+DATE_PATTERNS = [
+    re.compile(r"\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}"),
+    re.compile(r"\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}"),
+]
 
 
-def _extract_datetime_any(text: str) -> str | None:
-    """
-    ページの日本語表記日時（JST）や 2025/10/13 22:56 などを拾って UTC ISO へ。
-    """
-    m = JST_COMMENT_RE.search(text)
-    if m:
-        yyyy, MM, dd, hh, mi, ss = map(int, m.groups())
-        jst = timezone(timedelta(hours=9))
-        dt = datetime(yyyy, MM, dd, hh, mi, ss, tzinfo=jst).astimezone(UTC)
-        return dt.isoformat()
-
-    # フォールバック: 2025/10/13 22:56（秒なし）
-    m2 = re.search(r"(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})", text)
-    if m2:
-        yyyy, MM, dd, hh, mi = map(int, m2.groups())
-        jst = timezone(timedelta(hours=9))
-        dt = datetime(yyyy, MM, dd, hh, mi, 0, tzinfo=jst).astimezone(UTC)
-        return dt.isoformat()
+def _extract_datetime(text: str) -> str | None:
+    for pat in DATE_PATTERNS:
+        m = pat.search(text)
+        if m:
+            raw = m.group(0).replace("-", "/")
+            g = re.match(r"(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})", raw)
+            if not g:
+                continue
+            yyyy, mm, dd, hh, mi = g.groups()
+            dt = datetime(int(yyyy), int(mm), int(dd), int(hh), int(mi), tzinfo=UTC)
+            return dt.isoformat()
     return None
 
 
-def _posted_at_from_node(node: Tag) -> str | None:
-    """
-    ノード内の .comment_date や <time> から日時文字列を抽出し UTC ISO へ。
-    mypy のために AttributeValueList を避けるガードを置く。
-    """
-    # 1) <span class="comment_date">…</span>
-    cdate = node.select_one(".comment_date")
-    if isinstance(cdate, Tag):
-        text = cdate.get_text(" ", strip=True)
-        if text:
-            iso = _extract_datetime_any(text)
-            if iso:
-                return iso
-
-    # 2) <time datetime="...">
-    t = node.find("time")
-    if isinstance(t, Tag):
-        raw_val = t.get("datetime")
-        dt_attr: str | None = raw_val if isinstance(raw_val, str) else None
-        if dt_attr:
-            # datatime 属性は UTC 相当想定。形式が不定のため、失敗時は無視。
-            try:
-                # ここで秒やタイムゾーン有無に揺れがある想定なので、雑に置換して重み付け
-                # （ISOの場合はそのまま通る）
-                return datetime.fromisoformat(dt_attr).astimezone(UTC).isoformat()
-            except Exception:
-                pass
-        # テキストにも日時が入るケース
-        txt = t.get_text(" ", strip=True)
-        iso = _extract_datetime_any(txt)
-        if iso:
-            return iso
-
-    # 3) ノード全体テキストから最後の手掛かり
-    txt = node.get_text(" ", strip=True)
-    return _extract_datetime_any(txt)
-
-
 def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
-    """
-    - “最新の20件を表示しています” ブロック（フォーム直下）を最優先:
-        selector: form.pcmt ul li.pcmt
-    - 一般的コメントの予備: #comments, #comment, .comments, .commentlist など
-    """
     s = make_session()
     last_err: Exception | None = None
 
@@ -125,58 +77,80 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "lxml")
 
-            # まず「最新の20件」フォーム配下リスト
-            items: list[Tag] = cast(list[Tag], soup.select("form.pcmt ul li.pcmt"))
-
-            # それでもゼロなら一般的コンテナから拾う
-            if not items:
-                containers = cast(
+            # コメントコンテナ候補
+            containers: list[Tag] = list(
+                cast(
                     list[Tag],
                     soup.select(
                         "#comments, #comment, .comments, .commentlist, .pcomment, .comment-area"
                     ),
                 )
-                for c in containers:
-                    items.extend(cast(list[Tag], c.select("li")))
-                    items.extend(cast(list[Tag], c.select(".comment")))
-                    items.extend(cast(list[Tag], c.select(".comment-item")))
-                if not items and containers:
-                    items = containers  # container 自体が一件
+            )
+            if not containers:
+                h = soup.find(
+                    lambda tag: tag.name in ("h2", "h3", "h4") and "コメント" in tag.get_text()
+                )
+                if h:
+                    nxt = h.find_next(["ul", "ol", "div"])
+                    if isinstance(nxt, Tag):
+                        containers = [nxt]
+                    else:
+                        containers = []
+
+            # 各コンテナからコメント要素を拾う
+            item_nodes: list[Tag] = []
+            for container in containers:
+                item_nodes.extend(cast(list[Tag], container.select("li")))
+                item_nodes.extend(cast(list[Tag], container.select(".comment")))
+                item_nodes.extend(cast(list[Tag], container.select(".comment-item")))
+
+            # PukiWiki の「最新20件」ブロックを優先
+            latest_block_nodes = cast(list[Tag], soup.select("form.pcmt ul li.pcmt"))
+            if latest_block_nodes:
+                item_nodes = latest_block_nodes
+
+            # container 自体が1件のケース
+            if not item_nodes and containers:
+                item_nodes = containers
 
             comments: list[Comment] = []
             now_iso = datetime.now(UTC).isoformat()
 
-            for node in items:
-                # 連投対策で整形したテキスト
-                text = " ".join(node.get_text(" ", strip=True).split())
+            for item_node in item_nodes:
+                text = " ".join(item_node.get_text(" ", strip=True).split())
                 if not text:
                     continue
 
-                # author は明確に取れないことが多いので None を基本（必要なら強化）
-                author_node = node.select_one(".author, .comment-author, .commenter, .name")
-                author = author_node.get_text(strip=True) if isinstance(author_node, Tag) else None
+                author_node = item_node.select_one(".author, .comment-author, .commenter, .name")
+                author = author_node.get_text(strip=True) if author_node else None
 
-                posted_iso = _posted_at_from_node(node)
+                dt: str | None = None
+                time_node = item_node.find("time")
+                if time_node:
+                    dt = time_node.get("datetime") or _extract_datetime(
+                        time_node.get_text(" ", strip=True)
+                    )
+                if not dt:
+                    dt = _extract_datetime(text)
 
-                cid = Comment.mk_id(url, text, posted_iso)
-                comment_obj = Comment(
-                    comment_id=cid,
+                cm = Comment(
+                    comment_id=Comment.mk_id(url, text, dt),
                     source_url=url,
                     author=author,
                     content=text,
-                    posted_at=posted_iso,
+                    posted_at=dt,
                     collected_at=now_iso,
                 )
-                comments.append(comment_obj)
+                comments.append(cm)
 
-            # 重複除去
+            # 重複除去（comment_id でユニーク化）
             uniq: dict[str, Comment] = {}
-            for c in comments:
-                uniq[c.comment_id] = c
+            for cm in comments:
+                uniq[cm.comment_id] = cm
 
             return list(uniq.values())[:take]
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             last_err = e
             time.sleep(1.5 * (attempt + 1))
 
@@ -196,15 +170,15 @@ def write_csvs(rows: list[Comment], outdir: str = "data") -> None:
             w = csv.writer(f)
             if not exists or mode == "w":
                 w.writerow(header)
-            for c in data:
+            for cm in data:
                 w.writerow(
                     [
-                        c.comment_id,
-                        c.source_url,
-                        c.author or "",
-                        c.content,
-                        c.posted_at or "",
-                        c.collected_at,
+                        cm.comment_id,
+                        cm.source_url,
+                        cm.author or "",
+                        cm.content,
+                        cm.posted_at or "",
+                        cm.collected_at,
                     ]
                 )
 
@@ -219,7 +193,7 @@ def write_csvs(rows: list[Comment], outdir: str = "data") -> None:
                 if i == 0 or not row:
                     continue
                 seen.add(row[0])
-    new_rows = [c for c in rows if c.comment_id not in seen]
+    new_rows = [cm for cm in rows if cm.comment_id not in seen]
     if not os.path.exists(cum):
         dump(cum, rows, "w")
     elif new_rows:
