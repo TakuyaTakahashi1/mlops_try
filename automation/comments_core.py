@@ -122,14 +122,14 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                     continue
 
                 author_node = item_node.select_one(".author, .comment-author, .commenter, .name")
-                author = author_node.get_text(strip=True) if author_node else None
+                author = author_node.get_text(strip=True) if isinstance(author_node, Tag) else None
 
                 dt: str | None = None
                 time_node = item_node.find("time")
-                if time_node:
-                    dt = time_node.get("datetime") or _extract_datetime(
-                        time_node.get_text(" ", strip=True)
-                    )
+                if isinstance(time_node, Tag):
+                    dt_attr = time_node.get("datetime")
+                    dt_str = dt_attr if isinstance(dt_attr, str) else None
+                    dt = dt_str or _extract_datetime(time_node.get_text(" ", strip=True))
                 if not dt:
                     dt = _extract_datetime(text)
 
