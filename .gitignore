@@ -19,3 +19,8 @@ PY
 
 # local debug artifacts
 /tmp/
+
+# local ignores
+.venv/
+tmp/
+*.bak
