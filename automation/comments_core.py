@@ -38,7 +38,7 @@ class Comment:
     source_url: str
     author: str | None
     content: str
-    posted_at: str | None  # ISO文字列 or None
+    posted_at: str | None  # ISO文字列 or None（UTC想定）
     collected_at: str  # UTC ISO
 
     @staticmethod
@@ -78,7 +78,7 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
             soup = BeautifulSoup(r.text, "lxml")
 
             # コメントコンテナ候補
-            containers = list(
+            containers: list[Tag] = list(
                 cast(
                     list[Tag],
                     soup.select(
@@ -92,56 +92,62 @@ def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
                 )
                 if h:
                     nxt = h.find_next(["ul", "ol", "div"])
-                    containers = [nxt] if isinstance(nxt, Tag) else []
+                    if isinstance(nxt, Tag):
+                        containers = [nxt]
+                    else:
+                        containers = []
 
             # 各コンテナからコメント要素を拾う
-            items: list[Tag] = []
-            for cont in containers:
-                items.extend(cast(list[Tag], cont.select("li")))
-                items.extend(cast(list[Tag], cont.select(".comment")))
-                items.extend(cast(list[Tag], cont.select(".comment-item")))
+            item_nodes: list[Tag] = []
+            for container in containers:
+                item_nodes.extend(cast(list[Tag], container.select("li")))
+                item_nodes.extend(cast(list[Tag], container.select(".comment")))
+                item_nodes.extend(cast(list[Tag], container.select(".comment-item")))
 
-            # container自体が1件のケース
-            if not items and containers:
-                items = containers
+            # PukiWiki の「最新20件」ブロックを優先
+            latest_block_nodes = cast(list[Tag], soup.select("form.pcmt ul li.pcmt"))
+            if latest_block_nodes:
+                item_nodes = latest_block_nodes
+
+            # container 自体が1件のケース
+            if not item_nodes and containers:
+                item_nodes = containers
 
             comments: list[Comment] = []
             now_iso = datetime.now(UTC).isoformat()
 
-            for node in items:
-                text = " ".join(node.get_text(" ", strip=True).split())
+            for item_node in item_nodes:
+                text = " ".join(item_node.get_text(" ", strip=True).split())
                 if not text:
                     continue
 
-                author_node = node.select_one(".author, .comment-author, .commenter, .name")
-                author = author_node.get_text(strip=True) if author_node else None
+                author_node = item_node.select_one(".author, .comment-author, .commenter, .name")
+                author = author_node.get_text(strip=True) if isinstance(author_node, Tag) else None
 
                 dt: str | None = None
-                time_node = node.find("time")
-                if time_node:
-                    # time.get() は str | list | None を返す可能性があるため str に絞る
-                    attr = time_node.get("datetime")
-                    attr_str = attr if isinstance(attr, str) else None
-                    dt = attr_str or _extract_datetime(time_node.get_text(" ", strip=True))
+                time_node = item_node.find("time")
+                if isinstance(time_node, Tag):
+                    dt_attr = time_node.get("datetime")
+                    dt_str = dt_attr if isinstance(dt_attr, str) else None
+                    dt = dt_str or _extract_datetime(time_node.get_text(" ", strip=True))
                 if not dt:
                     dt = _extract_datetime(text)
 
-                cid = Comment.mk_id(url, text, dt)
-                comments.append(
-                    Comment(
-                        comment_id=cid,
-                        source_url=url,
-                        author=author,
-                        content=text,
-                        posted_at=dt,
-                        collected_at=now_iso,
-                    )
+                cm = Comment(
+                    comment_id=Comment.mk_id(url, text, dt),
+                    source_url=url,
+                    author=author,
+                    content=text,
+                    posted_at=dt,
+                    collected_at=now_iso,
                 )
+                comments.append(cm)
 
-            # 重複除去
+            # 重複除去（comment_id でユニーク化）
             uniq: dict[str, Comment] = {}
             for cm in comments:
                 uniq[cm.comment_id] = cm
+
             return list(uniq.values())[:take]
 
         except Exception as e:
@@ -164,15 +170,15 @@ def write_csvs(rows: list[Comment], outdir: str = "data") -> None:
             w = csv.writer(f)
             if not exists or mode == "w":
                 w.writerow(header)
-            for c in data:
+            for cm in data:
                 w.writerow(
                     [
-                        c.comment_id,
-                        c.source_url,
-                        c.author or "",
-                        c.content,
-                        c.posted_at or "",
-                        c.collected_at,
+                        cm.comment_id,
+                        cm.source_url,
+                        cm.author or "",
+                        cm.content,
+                        cm.posted_at or "",
+                        cm.collected_at,
                     ]
                 )
 
@@ -187,7 +193,7 @@ def write_csvs(rows: list[Comment], outdir: str = "data") -> None:
                 if i == 0 or not row:
                     continue
                 seen.add(row[0])
-    new_rows = [c for c in rows if c.comment_id not in seen]
+    new_rows = [cm for cm in rows if cm.comment_id not in seen]
     if not os.path.exists(cum):
         dump(cum, rows, "w")
     elif new_rows:

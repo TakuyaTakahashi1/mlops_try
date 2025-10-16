@@ -16,3 +16,11 @@ PY
 # track A12 comment CSVs
 !data/comments.csv
 !data/comments-*.csv
+
+# local debug artifacts
+/tmp/
+
+# local ignores
+.venv/
+tmp/
+*.bak

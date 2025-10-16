@@ -2,7 +2,7 @@ name: "A12: scheduled comments & PR"
 
 on:
   schedule:
-    - cron: "40 22 * * *"  # JST 07:40（UTC）
+    - cron: "30 22 * * *"   # JST 07:30（UTC固定）
   workflow_dispatch: {}
 
 permissions:
@@ -10,57 +10,73 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: a12-comments
+  group: a12-scheduled
   cancel-in-progress: false
 
 jobs:
   scrape-and-pr:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install deps
         run: |
           python -m pip install -U pip wheel setuptools
           pip install -r requirements.txt
+
       - name: Run comments scraper
-        id: run_scraper
+        id: run_comments
+        shell: bash
         run: |
-          python - <<'PY'
-          from automation.comments_core import fetch_latest_comments, write_csvs
-          import pathlib
-          targets = pathlib.Path("automation/comment_targets.txt").read_text(encoding="utf-8").splitlines()
-          urls = [u.strip() for u in targets if u.strip() and not u.strip().startswith("#")]
-          all_rows = []
-          for u in urls:
-            all_rows += fetch_latest_comments(u, take=5)
-          write_csvs(all_rows, outdir="data")
-          print(f"daily_rows={len(all_rows)}")
-          PY
-          echo "collected=$(awk 'NR>1{c++} END{print c+0}' data/comments-*.csv)" >> $GITHUB_OUTPUT
-          echo "log<<EOF" >> $GITHUB_OUTPUT
-          echo "daily file:"; ls -1 data/comments-*.csv | tail -n 1
-          echo "--- head ---"; head -n 10 data/comments-*.csv | tail -n 10
-          echo "EOF" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          python -m automation.scrape_comments --outdir data --take 5
+
+          # 件数カウント（最新CSV）
+          LATEST=$(ls -1 data/comments-*.csv 2>/dev/null | sort | tail -n 1 || true)
+          if [ -n "${LATEST:-}" ]; then
+            DAILY_ROWS=$(awk 'NR>1{c++} END{print c+0}' "$LATEST")
+          else
+            DAILY_ROWS=0
+          fi
+          echo "collected=$DAILY_ROWS" >> "$GITHUB_OUTPUT"
+
+          # ログ（先頭プレビュー）
+          echo "log<<EOF" >> "$GITHUB_OUTPUT"
+          echo "LATEST=${LATEST:-<none>}" >> "$GITHUB_OUTPUT"
+          if [ -n "${LATEST:-}" ]; then
+            echo "----- head of $LATEST -----" >> "$GITHUB_OUTPUT"
+            head -n 10 "$LATEST" >> "$GITHUB_OUTPUT"
+          fi
+          echo "----- head of cumulative (data/comments.csv) -----" >> "$GITHUB_OUTPUT"
+          head -n 10 data/comments.csv 2>/dev/null || true >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Prepare meta (UTC)
+        shell: bash
         run: |
-          echo "UTC_DATE=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
-          echo "UTC_YMD=$(date -u +%Y%m%d)" >> $GITHUB_ENV
-          echo "UTC_TS=$(date -u +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
-          echo "DAILY_BRANCH=auto/a12/comments-$(date -u +%Y%m%d)" >> $GITHUB_ENV
+          echo "UTC_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+          echo "UTC_YMD=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+          echo "UTC_TS=$(date -u +'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
+          echo "DAILY_BRANCH=auto/a12/comments-$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "A12: comments scrape ${{ env.UTC_DATE }} (UTC)"
-          title: "A12: comments scrape ${{ env.UTC_DATE }}"
+          title: "A12: comments scrape ${{ env.UTC_DATE }} (UTC)"
           body: |
             Automated run at (UTC): ${{ env.UTC_TS }}
-            **collected = ${{ steps.run_scraper.outputs.collected }}**
-            - Includes: data/comments-${{ env.UTC_YMD }}.csv
+            **collected = ${{ steps.run_comments.outputs.collected }}**
+
             <details><summary>log</summary>
 
-            ${{ steps.run_scraper.outputs.log }}
+            ${{ steps.run_comments.outputs.log }}
 
             </details>
           branch: "${{ env.DAILY_BRANCH }}"
