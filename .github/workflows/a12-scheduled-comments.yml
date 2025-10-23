@@ -63,7 +63,7 @@ jobs:
             ${{ steps.run_scraper.outputs.log }}
 
             </details>
-          branch: "${{ env.DAILY_BRANCH }}"
+          branch: auto/a12/comments
           delete-branch: true
           labels: |
             automation
