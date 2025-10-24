@@ -44,6 +44,35 @@ jobs:
           echo "--- head ---"; head -n 10 data/comments-*.csv | tail -n 10
           echo "EOF" >> $GITHUB_OUTPUT
       - name: Prepare meta (UTC)
+
+      - name: Keyword scan (A13)
+        id: scan_kw
+        run: |
+          set -euo pipefail
+          CSV="data/comments-${{ env.UTC_YMD }}.csv"
+          echo "csv=$CSV"
+          mkdir -p tmp
+          HITS_FILE="tmp/keyword_hits.txt"
+          : > "$HITS_FILE"
+          if [ -s automation/keywords.txt ] && [ -s "$CSV" ]; then
+            # 5列目(content)だけを見るのではなく、CSV全体に対して単純一致(F)・大文字小文字無視(i)で走査
+            # 行全体を出しておく（後でPR本文に入れる）
+            grep -iF -f automation/keywords.txt "$CSV" || true | tee "$HITS_FILE" >/dev/null
+          fi
+          HITS_COUNT=$(wc -l < "$HITS_FILE" || echo 0)
+          echo "hits_count=$HITS_COUNT" >> "$GITHUB_OUTPUT"
+          # 本文用に整形（先頭10件まで）
+          echo "----- keyword hits (up to 10) -----" > tmp/kw_body.txt
+          head -n 10 "$HITS_FILE" >> tmp/kw_body.txt || true
+          echo "" >> tmp/kw_body.txt
+          echo "(full: see artifact or download tmp/keyword_hits.txt)" >> tmp/kw_body.txt
+
+      - name: Upload keyword hits artifact (A13)
+        if: ${{ steps.scan_kw.outputs.hits_count != '0' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyword-hits-${{ env.UTC_YMD }}
+          path: tmp/keyword_hits.txt
         run: |
           echo "UTC_DATE=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
           echo "UTC_YMD=$(date -u +%Y%m%d)" >> $GITHUB_ENV
@@ -68,3 +97,4 @@ jobs:
           labels: |
             automation
             A12
+            ${{ steps.scan_kw.outputs.hits_count != '0' && 'keyword-hit' || '' }}
