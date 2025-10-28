@@ -11,7 +11,7 @@ from typing import cast
 
 import requests
 from bs4 import BeautifulSoup
-from bs4.element import Tag, NavigableString
+from bs4.element import NavigableString, Tag
 
 # --- HTTP / Fetch -------------------------------------------------------------
 
@@ -50,6 +50,7 @@ def _fetch_html(url: str) -> str:
 
 # --- モデル -------------------------------------------------------------------
 
+
 @dataclass
 class Comment:
     comment_id: str
@@ -57,7 +58,7 @@ class Comment:
     author: str | None
     content: str
     posted_at: str | None  # ISO文字列 or None
-    collected_at: str      # UTC ISO
+    collected_at: str  # UTC ISO
 
     @staticmethod
     def mk_id(source_url: str, content: str, posted_at: str | None) -> str:
@@ -115,6 +116,7 @@ def _text_collapse(node: Tag | NavigableString | None) -> str:
 
 
 # --- メイン処理 ----------------------------------------------------------------
+
 
 def fetch_latest_comments(url: str, take: int = 5) -> list[Comment]:
     """

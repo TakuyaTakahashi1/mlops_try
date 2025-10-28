@@ -19,3 +19,7 @@ PY
 
 # local venv
 .venv/
+
+# A14 artifacts
+/data/titles.sqlite
+/data/parquet/
