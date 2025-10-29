@@ -3,14 +3,16 @@
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi import Path as FPath
 from pydantic import BaseModel  # noqa: E402
+
+# ──── データ準備 ────────────────────────────
+from automation.storage import search_articles
 
 # ① .env を読む Settings をインポート
 from settings import settings
 
-# ──── データ準備 ────────────────────────────
 CSV_PATH: Path = Path("sales.csv")
 
 # sales.csv は date,amount の 2 列
@@ -31,6 +33,7 @@ class TotalResp(BaseModel):
 
 
 # ──── FastAPI 本体 ────────────────────────────
+
 app = FastAPI()
 
 
@@ -124,3 +127,20 @@ async def _handle_500(request: Request, exc: Exception):
 @app.get("/__error")
 def _boom() -> None:  # pragma: no cover
     raise RuntimeError("boom")
+
+
+@app.get("/articles")
+def list_articles(
+    q: str | None = Query(default=None, description="keyword (LIKE, case-insensitive)"),
+    date_from: str | None = Query(
+        default=None, description="inclusive ISO e.g. 2025-10-01T00:00:00"
+    ),
+    date_to: str | None = Query(default=None, description="exclusive ISO e.g. 2025-11-01T00:00:00"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+):
+    df = search_articles(
+        q=q, date_from=date_from, date_to=date_to, limit=limit, offset=offset, order=order
+    )
+    return df.to_dict(orient="records")
