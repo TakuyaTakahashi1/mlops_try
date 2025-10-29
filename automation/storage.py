@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -29,6 +30,8 @@ def _ensure_db(conn: sqlite3.Connection) -> None:
             fetched_at TEXT NOT NULL
         )
     """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_articles_fetched_at ON articles(fetched_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_articles_title ON articles(title)")
     cur.execute("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
     row = cur.fetchone()
     if row is None or row[0] < SCHEMA_VERSION:
@@ -130,3 +133,47 @@ def migrate_from_csv() -> tuple[int, int]:
     if rows_db:
         db_count = upsert_articles(rows_db)
     return db_count, pq_files
+
+
+def search_articles(
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    order: str = "desc",
+) -> pd.DataFrame:
+    """
+    ISO文字列の fetched_at を使って期間フィルタ。
+    q があれば title / url に対して LIKE（部分一致、大文字小文字区別なし）。
+    order は 'asc' か 'desc'。
+    """
+    conn = open_db()
+    try:
+        params: list[Any] = []
+        where = ["1=1"]
+        if date_from:
+            where.append("fetched_at >= ?")
+            params.append(date_from)
+        if date_to:
+            where.append("fetched_at < ?")
+            params.append(date_to)
+        if q:
+            where.append("(LOWER(title) LIKE ? OR LOWER(url) LIKE ?)")
+            like = f"%{q.lower()}%"
+            params.extend([like, like])
+        order_sql = "DESC" if str(order).lower() != "asc" else "ASC"
+        sql = f"""
+            SELECT url, title, fetched_at
+            FROM articles
+            WHERE {" AND ".join(where)}
+            ORDER BY fetched_at {order_sql}
+            LIMIT ? OFFSET ?
+        """
+        params.extend([int(limit), int(offset)])
+        import pandas as pd  # 安全のため明示（上でもimportしてるが二重でもOK）
+
+        df = pd.read_sql_query(sql, conn, params=tuple(params))
+        return df
+    finally:
+        conn.close()
