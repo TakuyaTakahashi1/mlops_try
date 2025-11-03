@@ -23,3 +23,6 @@ PY
 # A14 artifacts
 /data/titles.sqlite
 /data/parquet/
+
+# generated daily CSVs
+/data/daily/
