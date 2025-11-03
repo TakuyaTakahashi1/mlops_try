@@ -32,6 +32,29 @@ def _ensure_db(conn: sqlite3.Connection) -> None:
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_articles_fetched_at ON articles(fetched_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_articles_title ON articles(title)")
+    # FTS5（全文検索）
+    cur.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts
+        USING fts5(url, title, tokenize='unicode61');
+    """)
+    cur.execute("""
+        CREATE TRIGGER IF NOT EXISTS articles_ai AFTER INSERT ON articles BEGIN
+            INSERT INTO articles_fts(rowid, url, title)
+            VALUES (abs(random()), NEW.url, NEW.title);
+        END;
+    """)
+    cur.execute("""
+        CREATE TRIGGER IF NOT EXISTS articles_ad AFTER DELETE ON articles BEGIN
+            DELETE FROM articles_fts WHERE url = OLD.url;
+        END;
+    """)
+    cur.execute("""
+        CREATE TRIGGER IF NOT EXISTS articles_au AFTER UPDATE ON articles BEGIN
+            DELETE FROM articles_fts WHERE url = OLD.url;
+            INSERT INTO articles_fts(rowid, url, title)
+            VALUES (abs(random()), NEW.url, NEW.title);
+        END;
+    """)
     cur.execute("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
     row = cur.fetchone()
     if row is None or row[0] < SCHEMA_VERSION:
@@ -175,5 +198,40 @@ def search_articles(
 
         df = pd.read_sql_query(sql, conn, params=tuple(params))
         return df
+    finally:
+        conn.close()
+
+
+def fts_rebuild() -> int:
+    """articles 全件で FTS を作り直す。"""
+    conn = open_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM articles_fts")
+        cur.execute("SELECT url, title FROM articles")
+        rows = cur.fetchall()
+        cur.executemany(
+            "INSERT INTO articles_fts(rowid, url, title) VALUES (abs(random()), ?, ?)",
+            rows,
+        )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def fts_search_articles(q: str, limit: int = 50, offset: int = 0) -> pd.DataFrame:
+    """FTS5 で全文検索（BM25順）。"""
+    conn = open_db()
+    try:
+        sql = """
+            SELECT a.url, a.title, a.fetched_at
+            FROM articles a
+            JOIN articles_fts ON articles_fts.url = a.url
+            WHERE articles_fts MATCH ?
+            ORDER BY bm25(articles_fts) ASC
+            LIMIT ? OFFSET ?
+        """
+        return pd.read_sql_query(sql, conn, params=(q, int(limit), int(offset)))
     finally:
         conn.close()

@@ -1,19 +1,29 @@
-# main.py
-# ───────────────────────────────────────────
-from pathlib import Path
+import os  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+from pathlib import Path as PPath
 
 import pandas as pd
-from fastapi import FastAPI, Query
-from fastapi import Path as FPath
+from fastapi import FastAPI, Query, Request
+from fastapi import Path as ApiPath
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel  # noqa: E402
 
-# ──── データ準備 ────────────────────────────
-from automation.storage import search_articles
-
-# ① .env を読む Settings をインポート
+from automation.storage import fts_search_articles, search_articles
 from settings import settings
 
-CSV_PATH: Path = Path("sales.csv")
+# main.py
+# ───────────────────────────────────────────
+
+
+# ──── データ準備 ────────────────────────────
+
+# ① .env を読む Settings をインポート
+
+CSV_PATH: PPath = PPath("sales.csv")
 
 # sales.csv は date,amount の 2 列
 #   date  : 2025-06-01
@@ -48,7 +58,7 @@ def total_sales() -> dict[str, int]:
     summary="年間売上合計（年別）",
 )
 def total_sales_by_year(
-    year: int = FPath(..., ge=1900, le=2100, description="4 桁の西暦"),
+    year: int = ApiPath(..., ge=1900, le=2100, description="4 桁の西暦"),
 ) -> dict[str, int]:
     return {"total": calc_total_sales_by_year(df, year)}
 
@@ -64,15 +74,7 @@ def health():
 
 
 # --- A4: version endpoint & exception handlers ---
-import os  # noqa: E402
-import subprocess  # noqa: E402
-import sys  # noqa: E402
-from datetime import UTC, datetime  # noqa: E402
 
-from fastapi import Request  # noqa: E402
-from fastapi.exception_handlers import request_validation_exception_handler  # noqa: E402
-from fastapi.exceptions import RequestValidationError  # noqa: E402
-from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 # アプリ起動時刻（ISO8601）
@@ -143,4 +145,14 @@ def list_articles(
     df = search_articles(
         q=q, date_from=date_from, date_to=date_to, limit=limit, offset=offset, order=order
     )
+    return df.to_dict(orient="records")
+
+
+@app.get("/articles/fts")
+def list_articles_fts(
+    q: str = Query(..., description="FTS5 query. e.g. 'python OR blog'"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    df = fts_search_articles(q=q, limit=limit, offset=offset)
     return df.to_dict(orient="records")
