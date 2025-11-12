@@ -26,3 +26,4 @@ PY
 
 # generated daily CSVs
 /data/daily/
+tmp/

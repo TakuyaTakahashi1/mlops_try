@@ -48,3 +48,5 @@ requests
 beautifulsoup4
 lxml
 pyarrow
+playwright
+python-dotenv
