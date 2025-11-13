@@ -1,0 +1,45 @@
+name: quality
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Run data quality
+        id: qc
+        env:
+          QC_MIN_NEW_ROWS: "0"
+          QC_MAX_DUP_RATE: "0.25"
+        run: |
+          set -e
+          python -m automation.quality > qc.md || echo "QC_FAILED=1" >> $GITHUB_ENV
+          {
+            echo 'REPORT<<EOF'
+            cat qc.md
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment report to PR
+        if: github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          message: |
+            ## A18 Data Quality
+            ${{ steps.qc.outputs.REPORT }}
+
+      - name: Create issue on failure
+        if: env.QC_FAILED == '1'
+        uses: dacbd/create-issue-action@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "A18: Data quality failed"
+          body: |
+            Data quality check failed on ${{ github.repository }}@${{ github.sha }}
+            ${{ steps.qc.outputs.REPORT }}
