@@ -12,6 +12,8 @@ from bs4.element import Tag
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from observability import log_event, time_block
+
 TIMEOUT = 10  # seconds
 HEADERS = {
     "User-Agent": (
@@ -161,44 +163,75 @@ def main() -> int:
 
     if not targets_path.exists():
         print(f"[ERR] not found: {targets_path}")
+        log_event(
+            "scrape_titles_abort",
+            reason="targets_not_found",
+            targets_path=str(targets_path),
+        )
         return 2
 
     urls = _read_targets(targets_path)
     if not urls:
         print("[ERR] no valid urls in automation/targets.txt")
+        log_event(
+            "scrape_titles_abort",
+            reason="no_valid_urls",
+            targets_path=str(targets_path),
+        )
         return 2
+
+    log_event(
+        "scrape_titles_targets_loaded",
+        targets_path=str(targets_path),
+        targets_count=len(urls),
+    )
 
     sess = _create_session()
     today = date.today().isoformat()
 
-    # 取得（同一URLは1回だけ）
-    seen_url: set[str] = set()
-    new_rows: list[tuple[str, str, str]] = []
-    for url in urls:
-        if url in seen_url:
-            continue
-        seen_url.add(url)
-        title = _fetch(sess, url)
-        if title:
-            print(f"[OK] {url} -> {title}")
-            new_rows.append((today, url, title))
-        else:
-            print(f"[SKIP] {url} -> title not found")
+    # 以降の処理全体を time_block で計測
+    with time_block(
+        "scrape_titles",
+        date=today,
+        targets_count=len(urls),
+    ):
+        # 取得（同一URLは1回だけ）
+        seen_url: set[str] = set()
+        new_rows: list[tuple[str, str, str]] = []
+        for url in urls:
+            if url in seen_url:
+                continue
+            seen_url.add(url)
+            title = _fetch(sess, url)
+            if title:
+                print(f"[OK] {url} -> {title}")
+                new_rows.append((today, url, title))
+            else:
+                print(f"[SKIP] {url} -> title not found")
 
-    # 日次CSV
-    daily_dir.mkdir(parents=True, exist_ok=True)
-    daily_csv = daily_dir / f"titles-{today.replace('-', '')}.csv"
-    _write_csv(new_rows, daily_csv)
+        # 日次CSV
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        daily_csv = daily_dir / f"titles-{today.replace('-', '')}.csv"
+        _write_csv(new_rows, daily_csv)
 
-    # 累積CSV（過去とマージして重複排除）
-    existing = _read_existing(cumulative_csv)
-    merged = _dedup_merge(existing, new_rows)
-    _write_csv(merged, cumulative_csv)
+        # 累積CSV（過去とマージして重複排除）
+        existing = _read_existing(cumulative_csv)
+        merged = _dedup_merge(existing, new_rows)
+        _write_csv(merged, cumulative_csv)
 
-    print(
-        f"[OK] daily_rows={len(new_rows)} written: {daily_csv} / "
-        f"cumulative_rows={len(merged)} -> {cumulative_csv}"
-    )
+        print(
+            f"[OK] daily_rows={len(new_rows)} written: {daily_csv} / "
+            f"cumulative_rows={len(merged)} -> {cumulative_csv}"
+        )
+
+        log_event(
+            "scrape_titles_summary",
+            date=today,
+            targets_count=len(urls),
+            daily_rows=len(new_rows),
+            cumulative_rows=len(merged),
+        )
+
     return 0
 
 

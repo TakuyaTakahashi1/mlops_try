@@ -1,6 +1,7 @@
 import os  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
+import time  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from pathlib import Path as PPath
 
@@ -13,6 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel  # noqa: E402
 
 from automation.storage import fts_search_articles, search_articles
+from observability import log_event
 from settings import settings
 
 # main.py
@@ -20,8 +22,6 @@ from settings import settings
 
 
 # ──── データ準備 ────────────────────────────
-
-# ① .env を読む Settings をインポート
 
 CSV_PATH: PPath = PPath("sales.csv")
 
@@ -46,6 +46,28 @@ class TotalResp(BaseModel):
 
 app = FastAPI()
 
+# プロセス起動時刻（uptime 用）
+_PROCESS_STARTED_AT = time.time()
+
+
+def health_checks() -> dict[str, object]:
+    """依存性の簡易チェックを返す。
+
+    - Settings が読めている前提（import 済み）
+    - data ディレクトリが存在するか
+    """
+    data_dir = PPath("data")
+
+    checks = {
+        "settings_loaded": True,
+        "data_dir_exists": data_dir.exists(),
+    }
+    overall_ok = all(bool(v) for v in checks.values())
+    return {
+        "ok": overall_ok,
+        "checks": checks,
+    }
+
 
 @app.get("/total_sales", response_model=TotalResp, summary="全期間の売上合計")
 def total_sales() -> dict[str, int]:
@@ -63,19 +85,26 @@ def total_sales_by_year(
     return {"total": calc_total_sales_by_year(df, year)}
 
 
-# ② .env が読めているか確認用
+# ② .env が読めているか確認用 + 可観測性向けの拡張
 @app.get("/health", tags=["internal"], summary="死活監視")
-def health():
+def health() -> dict[str, object]:
+    uptime_sec = int(time.time() - _PROCESS_STARTED_AT)
+    checks = health_checks()
+    status = "ok" if checks["ok"] else "ng"
+
+    # health チェック自体もログに残す（構造化 JSON）
+    log_event("health_check", status=status, uptime_sec=uptime_sec)
+
     return {
-        "status": "ok",
+        "status": status,
         "db": settings.db_url,  # .env の DB_URL がそのまま入る
         "api": settings.api_key,  # 同じく API_KEY
+        "uptime_sec": uptime_sec,
+        "checks": checks["checks"],
     }
 
 
 # --- A4: version endpoint & exception handlers ---
-
-from pydantic import BaseModel  # noqa: E402
 
 # アプリ起動時刻（ISO8601）
 _STARTED_AT = datetime.now(UTC).astimezone().isoformat(timespec="seconds")
@@ -85,7 +114,7 @@ def _git_sha_short() -> str:
     try:
         sha = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
-        )  # noqa: E501  # noqa: E501
+        )  # noqa: E501
         return sha.decode("utf-8").strip()
     except Exception:
         return os.getenv("GIT_SHA", "unknown")
@@ -142,10 +171,10 @@ def list_articles(
     offset: int = Query(default=0, ge=0),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
 ):
-    df = search_articles(
+    df_articles = search_articles(
         q=q, date_from=date_from, date_to=date_to, limit=limit, offset=offset, order=order
     )
-    return df.to_dict(orient="records")
+    return df_articles.to_dict(orient="records")
 
 
 @app.get("/articles/fts")
@@ -154,5 +183,5 @@ def list_articles_fts(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    df = fts_search_articles(q=q, limit=limit, offset=offset)
-    return df.to_dict(orient="records")
+    df_articles = fts_search_articles(q=q, limit=limit, offset=offset)
+    return df_articles.to_dict(orient="records")
