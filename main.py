@@ -13,8 +13,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel  # noqa: E402
 
+from automation.observability import log_event
 from automation.storage import fts_search_articles, search_articles
-from observability import log_event
 from settings import settings
 
 # main.py
