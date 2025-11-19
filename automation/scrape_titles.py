@@ -12,7 +12,7 @@ from bs4.element import Tag
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from observability import log_event, time_block
+from automation.observability import log_event, time_block
 
 TIMEOUT = 10  # seconds
 HEADERS = {
