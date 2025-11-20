@@ -119,3 +119,21 @@ GitHub Actions では、pull request / main への push ごとに同等のチェ
 ## ライセンス
 
 本プロジェクトは MIT License のもとで公開予定です。
+## Docker での実行
+
+このリポジトリには `Dockerfile` と `docker-compose.yml` が入っており、Docker だけで起動できます。
+
+- ビルド＆起動例: `docker compose up --build`
+- 停止: `docker compose down`
+- 起動後の API ドキュメント: `http://127.0.0.1:8000/docs`
+
+---
+
+## CI の概要
+
+- `.github/workflows/ci.yml` に CI 設定を定義
+- `push` / `pull_request` ごとに以下を自動実行
+  - `ruff` による Lint / フォーマットチェック
+  - `mypy` による型チェック
+  - `pytest` + `pytest-cov` によるテスト（カバレッジ閾値あり）
+- `main` ブランチは Rulesets で保護しており、CI が緑でないとマージできない運用にしている。
