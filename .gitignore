@@ -27,3 +27,4 @@ PY
 # generated daily CSVs
 /data/daily/
 tmp/
+mlops_try.egg-info/
