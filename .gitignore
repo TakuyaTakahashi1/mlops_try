@@ -28,3 +28,4 @@ PY
 /data/daily/
 tmp/
 mlops_try.egg-info/
+models/
