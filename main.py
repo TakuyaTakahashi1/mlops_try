@@ -1,8 +1,7 @@
-import os  # noqa: E402
-import subprocess  # noqa: E402
-import sys  # noqa: E402
-import time  # noqa: E402
-from datetime import UTC, datetime  # noqa: E402
+import os
+import subprocess
+import sys
+from datetime import UTC, datetime
 from pathlib import Path as PPath
 
 import pandas as pd
@@ -11,10 +10,11 @@ from fastapi import Path as ApiPath
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel
 
-from automation.observability import log_event
 from automation.storage import fts_search_articles, search_articles
+from ml_sample.model import ensure_model
+from ml_sample.model import predict as iris_predict
 from settings import settings
 
 # main.py
@@ -37,36 +37,35 @@ def calc_total_sales_by_year(data: pd.DataFrame, year: int) -> int:
     return int(data.loc[mask, "amount"].sum())
 
 
-# ──── Pydantic レスポンスモデル ───────────────
+# ──── Pydantic モデル ───────────────
+
+
 class TotalResp(BaseModel):
     total: int
+
+
+class VersionInfo(BaseModel):
+    version: str
+    git_sha: str
+    started_at: str
+    python: str
+
+
+class IrisFeatures(BaseModel):
+    sepal_length: float
+    sepal_width: float
+    petal_length: float
+    petal_width: float
+
+
+class IrisPrediction(BaseModel):
+    predicted_class: int
+    predicted_label: str
 
 
 # ──── FastAPI 本体 ────────────────────────────
 
 app = FastAPI()
-
-# プロセス起動時刻（uptime 用）
-_PROCESS_STARTED_AT = time.time()
-
-
-def health_checks() -> dict[str, object]:
-    """依存性の簡易チェックを返す。
-
-    - Settings が読めている前提（import 済み）
-    - data ディレクトリが存在するか
-    """
-    data_dir = PPath("data")
-
-    checks = {
-        "settings_loaded": True,
-        "data_dir_exists": data_dir.exists(),
-    }
-    overall_ok = all(bool(v) for v in checks.values())
-    return {
-        "ok": overall_ok,
-        "checks": checks,
-    }
 
 
 @app.get("/total_sales", response_model=TotalResp, summary="全期間の売上合計")
@@ -85,22 +84,13 @@ def total_sales_by_year(
     return {"total": calc_total_sales_by_year(df, year)}
 
 
-# ② .env が読めているか確認用 + 可観測性向けの拡張
+# ② .env が読めているか確認用
 @app.get("/health", tags=["internal"], summary="死活監視")
-def health() -> dict[str, object]:
-    uptime_sec = int(time.time() - _PROCESS_STARTED_AT)
-    checks = health_checks()
-    status = "ok" if checks["ok"] else "ng"
-
-    # health チェック自体もログに残す（構造化 JSON）
-    log_event("health_check", status=status, uptime_sec=uptime_sec)
-
+def health():
     return {
-        "status": status,
+        "status": "ok",
         "db": settings.db_url,  # .env の DB_URL がそのまま入る
         "api": settings.api_key,  # 同じく API_KEY
-        "uptime_sec": uptime_sec,
-        "checks": checks["checks"],
     }
 
 
@@ -113,8 +103,9 @@ _STARTED_AT = datetime.now(UTC).astimezone().isoformat(timespec="seconds")
 def _git_sha_short() -> str:
     try:
         sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
-        )  # noqa: E501
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        )
         return sha.decode("utf-8").strip()
     except Exception:
         return os.getenv("GIT_SHA", "unknown")
@@ -123,13 +114,6 @@ def _git_sha_short() -> str:
 def _app_version() -> str:
     # .env などで APP_VERSION があればそれを使う。無ければ 0.1.0 とする。
     return os.getenv("APP_VERSION", "0.1.0")
-
-
-class VersionInfo(BaseModel):
-    version: str
-    git_sha: str
-    started_at: str
-    python: str
 
 
 @app.get("/version", response_model=VersionInfo)
@@ -160,19 +144,50 @@ def _boom() -> None:  # pragma: no cover
     raise RuntimeError("boom")
 
 
+# --- ML Demo: Iris 予測 API ---
+
+
+@app.post(
+    "/ml/iris/predict",
+    response_model=IrisPrediction,
+    summary="Iris classification sample (ML demo)",
+)
+def ml_iris_predict(features: IrisFeatures) -> IrisPrediction:
+    ensure_model()
+    cls, label = iris_predict(
+        sepal_length=features.sepal_length,
+        sepal_width=features.sepal_width,
+        petal_length=features.petal_length,
+        petal_width=features.petal_width,
+    )
+    return IrisPrediction(predicted_class=cls, predicted_label=label)
+
+
+# --- Articles API ---
+
+
 @app.get("/articles")
 def list_articles(
     q: str | None = Query(default=None, description="keyword (LIKE, case-insensitive)"),
     date_from: str | None = Query(
-        default=None, description="inclusive ISO e.g. 2025-10-01T00:00:00"
+        default=None,
+        description="inclusive ISO e.g. 2025-10-01T00:00:00",
     ),
-    date_to: str | None = Query(default=None, description="exclusive ISO e.g. 2025-11-01T00:00:00"),
+    date_to: str | None = Query(
+        default=None,
+        description="exclusive ISO e.g. 2025-11-01T00:00:00",
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
 ):
     df_articles = search_articles(
-        q=q, date_from=date_from, date_to=date_to, limit=limit, offset=offset, order=order
+        q=q,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+        order=order,
     )
     return df_articles.to_dict(orient="records")
 
