@@ -103,7 +103,8 @@ _STARTED_AT = datetime.now(UTC).astimezone().isoformat(timespec="seconds")
 def _git_sha_short() -> str:
     try:
         sha = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
         )
         return sha.decode("utf-8").strip()
     except Exception:
@@ -169,17 +170,26 @@ def ml_iris_predict(features: IrisFeatures) -> IrisPrediction:
 def list_articles(
     q: str | None = Query(default=None, description="keyword (LIKE, case-insensitive)"),
     date_from: str | None = Query(
-        default=None, description="inclusive ISO e.g. 2025-10-01T00:00:00"
+        default=None,
+        description="inclusive ISO e.g. 2025-10-01T00:00:00",
     ),
-    date_to: str | None = Query(default=None, description="exclusive ISO e.g. 2025-11-01T00:00:00"),
+    date_to: str | None = Query(
+        default=None,
+        description="exclusive ISO e.g. 2025-11-01T00:00:00",
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
 ):
-    df = search_articles(
-        q=q, date_from=date_from, date_to=date_to, limit=limit, offset=offset, order=order
+    df_articles = search_articles(
+        q=q,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+        order=order,
     )
-    return df.to_dict(orient="records")
+    return df_articles.to_dict(orient="records")
 
 
 @app.get("/articles/fts")
@@ -188,5 +198,5 @@ def list_articles_fts(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    df = fts_search_articles(q=q, limit=limit, offset=offset)
-    return df.to_dict(orient="records")
+    df_articles = fts_search_articles(q=q, limit=limit, offset=offset)
+    return df_articles.to_dict(orient="records")
