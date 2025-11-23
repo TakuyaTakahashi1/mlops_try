@@ -10,6 +10,9 @@ from sklearn.linear_model import LogisticRegression
 # プロジェクト直下に models/iris.joblib を置く
 MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "iris.joblib"
 
+# クラス番号 -> ラベル名
+CLASS_LABELS: tuple[str, str, str] = ("setosa", "versicolor", "virginica")
+
 
 def train_and_save(model_path: Path | None = None) -> Path:
     """Iris データでロジスティック回帰モデルを学習して保存する。"""
@@ -35,17 +38,32 @@ def load_model(model_path: Path | None = None):
     return joblib.load(model_path)
 
 
+def ensure_model(model_path: Path | None = None) -> Path:
+    """モデルファイルが無ければ学習して作成し、そのパスを返す。"""
+    if model_path is None:
+        model_path = MODEL_PATH
+    if not model_path.exists():
+        return train_and_save(model_path)
+    return model_path
+
+
 def predict(
     sepal_length: float,
     sepal_width: float,
     petal_length: float,
     petal_width: float,
-) -> int:
-    """4つの特徴量から Iris のクラス（0/1/2）を予測する。"""
+) -> tuple[int, str]:
+    """4つの特徴量から Iris のクラス番号とラベル名を予測する。"""
+    ensure_model()
     model = load_model()
     X = np.array([[sepal_length, sepal_width, petal_length, petal_width]], dtype=float)
     pred = model.predict(X)
-    return int(pred[0])
+    cls = int(pred[0])
+    if 0 <= cls < len(CLASS_LABELS):
+        label = CLASS_LABELS[cls]
+    else:
+        label = "unknown"
+    return cls, label
 
 
 def main() -> int:
