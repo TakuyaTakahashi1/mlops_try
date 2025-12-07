@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import joblib
 import numpy as np
@@ -64,6 +65,15 @@ def predict(
     else:
         label = "unknown"
     return cls, label
+
+
+def get_model_status(model_path: Path | None = None) -> Literal["ready", "missing"]:
+    """モデルファイルが存在すれば 'ready'、無ければ 'missing' を返す。"""
+    if model_path is None:
+        model_path = MODEL_PATH
+    if model_path.exists():
+        return "ready"
+    return "missing"
 
 
 def main() -> int:

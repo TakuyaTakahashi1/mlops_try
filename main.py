@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from automation.storage import fts_search_articles, search_articles
-from ml_sample.model import ensure_model
+from ml_sample.model import ensure_model, get_model_status
 from ml_sample.model import predict as iris_predict
 from settings import settings
 
@@ -91,6 +91,7 @@ def health():
         "status": "ok",
         "db": settings.db_url,  # .env の DB_URL がそのまま入る
         "api": settings.api_key,  # 同じく API_KEY
+        "iris_model": get_model_status(),  # Iris モデルの状態を追加
     }
 
 
