@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -67,7 +68,7 @@ def load_iris_metrics_history(metrics_dir: Path | None = None) -> list[IrisMetri
     return records
 
 
-def _format_row(record: IrisMetricsRecord) -> str:
+def _format_row_table(record: IrisMetricsRecord) -> str:
     """テーブル用の 1 行をフォーマットする。"""
     ts = record.created_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     acc = f"{record.accuracy:.4f}"
@@ -75,24 +76,58 @@ def _format_row(record: IrisMetricsRecord) -> str:
     return f"{ts}  |  {acc:>7}  |  {name}"
 
 
-def main() -> int:
+def _format_row_tsv(record: IrisMetricsRecord) -> str:
+    """TSV 用の 1 行をフォーマットする。"""
+    ts = record.created_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    acc = f"{record.accuracy:.4f}"
+    name = record.path.name
+    return f"{ts}\t{acc}\t{name}"
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Summarize Iris evaluation metrics history.",
+    )
+    parser.add_argument(
+        "--metrics-dir",
+        type=Path,
+        default=Path("metrics"),
+        help="Directory that contains iris-*.json (default: ./metrics)",
+    )
+    parser.add_argument(
+        "--tsv",
+        action="store_true",
+        help="Output summary in TSV format instead of table.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
     """Iris 評価メトリクス履歴を一覧表示する CLI。"""
-    metrics_dir = Path("metrics")
+    args = parse_args(argv)
+    metrics_dir: Path = args.metrics_dir
+    use_tsv: bool = args.tsv
+
     records = load_iris_metrics_history(metrics_dir)
 
     if not records:
-        print("No Iris metrics found in ./metrics")
+        print(f"No Iris metrics found in {metrics_dir}")
         return 0
 
-    print("created_at (UTC)        | accuracy | file")
-    print("------------------------+----------+---------------------------")
-    for rec in records:
-        print(_format_row(rec))
+    if use_tsv:
+        print("created_at_utc\taccuracy\tfile")
+        for rec in records:
+            print(_format_row_tsv(rec))
+    else:
+        print("created_at (UTC)        | accuracy | file")
+        print("------------------------+----------+---------------------------")
+        for rec in records:
+            print(_format_row_table(rec))
 
-    latest_path = metrics_dir / "iris-latest.json"
-    if latest_path.exists():
-        print()
-        print(f"Latest: {latest_path}")
+        latest_path = metrics_dir / "iris-latest.json"
+        if latest_path.exists():
+            print()
+            print(f"Latest: {latest_path}")
 
     return 0
 
