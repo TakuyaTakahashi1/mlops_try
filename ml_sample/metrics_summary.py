@@ -84,6 +84,16 @@ def _format_row_tsv(record: IrisMetricsRecord) -> str:
     return f"{ts}\t{acc}\t{name}"
 
 
+def _format_row_chart(record: IrisMetricsRecord) -> str:
+    """ASCII チャート用の 1 行をフォーマットする。"""
+    date_label = record.created_at.astimezone(UTC).strftime("%Y-%m-%d")
+    # 0.0〜1.0 の accuracy を 0〜40 個のバーに変換
+    bar_len = max(0, min(40, int(round(record.accuracy * 40))))
+    bar = "#" * bar_len
+    acc = f"{record.accuracy:.4f}"
+    return f"{date_label} | {bar} ({acc})"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Summarize Iris evaluation metrics history.",
@@ -94,10 +104,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("metrics"),
         help="Directory that contains iris-*.json (default: ./metrics)",
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "--tsv",
         action="store_true",
         help="Output summary in TSV format instead of table.",
+    )
+    group.add_argument(
+        "--ascii-chart",
+        action="store_true",
+        help="Output accuracy as a simple ASCII bar chart.",
     )
     return parser.parse_args(argv)
 
@@ -107,11 +123,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     metrics_dir: Path = args.metrics_dir
     use_tsv: bool = args.tsv
+    use_chart: bool = args.ascii_chart
 
     records = load_iris_metrics_history(metrics_dir)
 
     if not records:
         print(f"No Iris metrics found in {metrics_dir}")
+        return 0
+
+    if use_chart:
+        print("Iris accuracy chart")
+        print("-------------------")
+        for rec in records:
+            print(_format_row_chart(rec))
         return 0
 
     if use_tsv:
