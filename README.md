@@ -113,3 +113,4 @@ Iris ML API: POST http://localhost:8000/ml/iris/predict
 
 停止
 docker compose down
+python -m ml_sample.train --out artifacts/model.joblib

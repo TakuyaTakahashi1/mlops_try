@@ -30,3 +30,6 @@ tmp/
 mlops_try.egg-info/
 models/
 models/
+
+# artifacts
+artifacts/
