@@ -116,3 +116,7 @@ docker compose down
 
 Train（モデル成果物を作る）
 python -m ml_sample.train --out artifacts/model.joblib
+### 注意: scikit-learn のモデル互換性警告（InconsistentVersionWarning）
+
+`*.joblib` を読み込む際に `InconsistentVersionWarning` が出る場合、保存時と実行時で scikit-learn のバージョンが異なることを意味します。
+本リポジトリはデモのため警告を許容していますが、実運用では scikit-learn を固定（バージョンピン）し、同一バージョンでモデル成果物を再作成して再現性を担保します。
