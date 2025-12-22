@@ -36,3 +36,6 @@ artifacts/
 
 # artifacts
 artifacts/
+
+# metrics output
+metrics/
