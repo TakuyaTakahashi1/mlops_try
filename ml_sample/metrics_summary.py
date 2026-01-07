@@ -20,7 +20,6 @@ class IrisMetricsRecord:
 def _iter_metrics_files(metrics_dir: Path) -> Iterable[Path]:
     """metrics_dir 配下の iris-*.json（latest 以外）を列挙する。"""
     if not metrics_dir.exists():
-        # ジェネレータ関数なので値付き return は NG
         return
 
     for path in metrics_dir.glob("iris-*.json"):
@@ -29,6 +28,23 @@ def _iter_metrics_files(metrics_dir: Path) -> Iterable[Path]:
         if not path.is_file():
             continue
         yield path
+
+
+def _parse_record(path: Path) -> IrisMetricsRecord | None:
+    """単一の JSON から created_at / accuracy を取り出してレコード化する。"""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    created_at_raw = data.get("created_at")
+    accuracy_raw = data.get("accuracy")
+
+    if not created_at_raw or accuracy_raw is None:
+        return None
+
+    created_at = datetime.fromisoformat(created_at_raw)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+
+    accuracy = float(accuracy_raw)
+    return IrisMetricsRecord(created_at=created_at, accuracy=accuracy, path=path)
 
 
 def load_iris_metrics_history(metrics_dir: Path | None = None) -> list[IrisMetricsRecord]:
@@ -42,30 +58,20 @@ def load_iris_metrics_history(metrics_dir: Path | None = None) -> list[IrisMetri
     records: list[IrisMetricsRecord] = []
 
     for path in _iter_metrics_files(base_dir):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        created_at_raw = data.get("created_at")
-        accuracy_raw = data.get("accuracy")
-
-        if not created_at_raw or accuracy_raw is None:
-            # 想定外フォーマットはスキップ
+        rec = _parse_record(path)
+        if rec is None:
             continue
-
-        created_at = datetime.fromisoformat(created_at_raw)
-        if created_at.tzinfo is None:
-            # 念のため UTC を付与
-            created_at = created_at.replace(tzinfo=UTC)
-
-        accuracy = float(accuracy_raw)
-        records.append(
-            IrisMetricsRecord(
-                created_at=created_at,
-                accuracy=accuracy,
-                path=path,
-            ),
-        )
+        records.append(rec)
 
     records.sort(key=lambda r: r.created_at)
     return records
+
+
+def load_iris_metrics_file(metrics_path: Path) -> IrisMetricsRecord | None:
+    """単一の metrics.json を読み込んでレコードとして返す。"""
+    if not metrics_path.exists() or not metrics_path.is_file():
+        return None
+    return _parse_record(metrics_path)
 
 
 def _format_row_table(record: IrisMetricsRecord) -> str:
@@ -87,7 +93,6 @@ def _format_row_tsv(record: IrisMetricsRecord) -> str:
 def _format_row_chart(record: IrisMetricsRecord) -> str:
     """ASCII チャート用の 1 行をフォーマットする。"""
     date_label = record.created_at.astimezone(UTC).strftime("%Y-%m-%d")
-    # 0.0〜1.0 の accuracy を 0〜40 個のバーに変換
     bar_len = max(0, min(40, int(round(record.accuracy * 40))))
     bar = "#" * bar_len
     acc = f"{record.accuracy:.4f}"
@@ -98,19 +103,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Summarize Iris evaluation metrics history.",
     )
-    parser.add_argument(
+
+    # 互換性維持：--metrics-dir はそのまま残す
+    group_input = parser.add_mutually_exclusive_group()
+    group_input.add_argument(
         "--metrics-dir",
         type=Path,
         default=Path("metrics"),
         help="Directory that contains iris-*.json (default: ./metrics)",
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    group_input.add_argument(
+        "--metrics",
+        type=Path,
+        default=None,
+        help="Path to a single metrics JSON file (e.g., artifacts/metrics.json).",
+    )
+
+    group_out = parser.add_mutually_exclusive_group()
+    group_out.add_argument(
         "--tsv",
         action="store_true",
         help="Output summary in TSV format instead of table.",
     )
-    group.add_argument(
+    group_out.add_argument(
         "--ascii-chart",
         action="store_true",
         help="Output accuracy as a simple ASCII bar chart.",
@@ -121,10 +136,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Iris 評価メトリクス履歴を一覧表示する CLI。"""
     args = parse_args(argv)
-    metrics_dir: Path = args.metrics_dir
+
     use_tsv: bool = args.tsv
     use_chart: bool = args.ascii_chart
 
+    # 単一ファイルモード
+    metrics_path: Path | None = args.metrics
+    if metrics_path is not None:
+        rec = load_iris_metrics_file(metrics_path)
+        if rec is None:
+            print(f"No Iris metrics found in {metrics_path}")
+            return 0
+
+        if use_chart:
+            print("Iris accuracy chart")
+            print("-------------------")
+            print(_format_row_chart(rec))
+            return 0
+
+        if use_tsv:
+            print("created_at_utc\taccuracy\tfile")
+            print(_format_row_tsv(rec))
+        else:
+            print("created_at (UTC)        | accuracy | file")
+            print("------------------------+----------+---------------------------")
+            print(_format_row_table(rec))
+        return 0
+
+    # 履歴モード（既存挙動）
+    metrics_dir: Path = args.metrics_dir
     records = load_iris_metrics_history(metrics_dir)
 
     if not records:

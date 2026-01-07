@@ -56,6 +56,9 @@ jobs:
           sed -n '1,200p' run.log >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+          # ---- Nightreign latest update （★ここを追加）----
+          python -m automation.nightreign_updates > data/nightreign_latest.json
+
       - name: Prepare meta (UTC)
         run: |
           echo "UTC_DATE=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV

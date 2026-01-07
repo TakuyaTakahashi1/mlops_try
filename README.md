@@ -91,3 +91,32 @@ Iris ML デモについて（概要）
 
 ライセンス
 本プロジェクトは MIT License のもとで公開予定です。
+## Docker での起動
+
+このリポジトリは、Docker コンテナとしても起動できます。
+FastAPI アプリと Iris ML API をまとめて立ち上げられるので、検証やデモに使いやすい構成です。
+
+### 前提
+
+- Docker 環境がインストールされていること（Docker Desktop など）
+- プロジェクト直下に `.env` があること（`cp .env.example .env` で作成可能）
+
+### 起動手順
+
+```bash
+docker compose up --build
+
+起動後、次の URL にアクセスできます。
+ヘルスチェック: http://localhost:8000/health
+API ドキュメント (Swagger UI): http://localhost:8000/docs
+Iris ML API: POST http://localhost:8000/ml/iris/predict
+
+停止
+docker compose down
+
+Train（モデル成果物を作る）
+python -m ml_sample.train --out artifacts/model.joblib
+### 注意: scikit-learn のモデル互換性警告（InconsistentVersionWarning）
+
+`*.joblib` を読み込む際に `InconsistentVersionWarning` が出る場合、保存時と実行時で scikit-learn のバージョンが異なることを意味します。
+本リポジトリはデモのため警告を許容していますが、実運用では scikit-learn を固定（バージョンピン）し、同一バージョンでモデル成果物を再作成して再現性を担保します。
