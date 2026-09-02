@@ -26,6 +26,11 @@ def _load_iris_model() -> Any:
     return model_or_path
 
 
+def _load_model_from_path(model_path: Path) -> Any:
+    """指定されたパスから joblib モデルを読み込む。"""
+    return load(model_path)
+
+
 @dataclass
 class IrisEvaluationResult:
     """Iris モデル評価の結果を表すデータクラス。"""
@@ -34,19 +39,23 @@ class IrisEvaluationResult:
     accuracy: float
 
 
-def evaluate_iris_model(output_dir: Path | None = None) -> IrisEvaluationResult:
+def evaluate_iris_model(
+    output_dir: Path | None = None,
+    model_path: Path | None = None,
+) -> IrisEvaluationResult:
     """
     Iris モデルを評価し、メトリクスを JSON に保存する。
 
     - output_dir が指定されていればそこに保存
     - 指定されなければ ./metrics 配下に保存
     - 時刻付きファイルと iris-latest.json の 2 つを出力
+    - model_path が指定されていればその joblib を使う（未指定なら ensure_model()）
     """
     iris = load_iris()
     X = iris["data"]
     y_true = iris["target"]
 
-    model: Any = _load_iris_model()
+    model: Any = _load_model_from_path(model_path) if model_path is not None else _load_iris_model()
     y_pred = model.predict(X)
 
     accuracy = float(accuracy_score(y_true, y_pred))
